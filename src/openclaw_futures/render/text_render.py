@@ -12,6 +12,7 @@ def render_help() -> str:
             "",
             "TradingClaw is a local futures analysis engine for MCL and M6E.",
             "It does not configure OpenClaw, does not log into Discord, and execution is manual only.",
+            "Live testing currently supports cached EUR/USD bars for M6E scanning only.",
             "",
             "HTTP endpoints:",
             "GET /health",
@@ -28,12 +29,22 @@ def render_help() -> str:
             "POST /ideas/{idea_id}/result",
             "GET /stats",
             "POST /reasoning-context",
+            "POST /sync/run",
+            "GET /sync/status",
+            "POST /scan/run",
+            "GET /scan/status",
             "",
             "Statuses:",
             "proposed -> taken",
             "proposed -> skipped",
             "proposed -> invalidated",
             "taken -> win/loss/breakeven",
+            "",
+            "CLI commands:",
+            "tradingclaw-futures sync run",
+            "tradingclaw-futures sync status",
+            "tradingclaw-futures scan run",
+            "tradingclaw-futures scan status",
             "",
             "Idea IDs:",
             "Stable numeric IDs are assigned from SQLite when a plan is persisted.",
@@ -161,6 +172,62 @@ def render_stats(stats: StatsSummary) -> str:
             f"Average realized PnL: ${stats.average_pnl:.2f}",
         ]
     )
+
+
+def render_sync_status(status: dict[str, object]) -> str:
+    window = status["sync_window"]
+    summary = status.get("last_sync_summary") or {}
+    lines = [
+        "TradingClaw Sync Status",
+        f"Provider: {status.get('provider', 'twelvedata')}",
+        f"Symbol: {status.get('symbol')}",
+        f"Interval: {status.get('interval') or '?'}",
+        f"Backfill days: {status.get('backfill_days')}",
+        f"Latest cached timestamp: {status.get('latest_cached_timestamp') or 'none'}",
+        f"Sync window: {window['start']}-{window['end']} | active {window['active']}",
+        f"Last sync time: {status.get('last_sync_time') or 'never'}",
+    ]
+    if summary:
+        lines.append(
+            f"Last sync summary: mode {summary.get('sync_mode')} | fetched {summary.get('fetched_bars')} | stored changes {summary.get('stored_changes')}"
+        )
+    return "\n".join(lines)
+
+
+def render_scan_status(status: dict[str, object]) -> str:
+    window = status["alert_window"]
+    summary = status.get("last_scan_result_summary") or {}
+    lines = [
+        "TradingClaw Scan Status",
+        f"Symbol: {status.get('symbol')}",
+        f"Interval: {status.get('interval') or '?'}",
+        f"Alert window: {window['start']}-{window['end']} | active {status.get('active')}",
+        f"Last scan time: {status.get('last_scan_time') or 'never'}",
+    ]
+    if summary:
+        lines.append(
+            f"Last scan summary: bars {summary.get('bars_used')} | valid setups {summary.get('valid_setups')} | persisted ideas {len(summary.get('persisted_idea_ids', []))}"
+        )
+    return "\n".join(lines)
+
+
+def render_window_state(
+    *,
+    alert_window_active: bool,
+    manual_override: bool,
+    persist_requested: bool,
+    webhook_requested: bool,
+) -> str:
+    lines = [
+        "TradingClaw Scan Run",
+        f"Alert window active: {alert_window_active}",
+        f"Manual override used: {manual_override}",
+        f"Persist requested: {persist_requested}",
+        f"Webhook requested: {webhook_requested}",
+    ]
+    if not alert_window_active and not manual_override:
+        lines.append("Outside the alert window, so scan output is informational only.")
+    return "\n".join(lines)
 
 
 def fmt(value: float | None, decimals: int) -> str:

@@ -37,6 +37,25 @@ CREATE TABLE IF NOT EXISTS trade_actions (
     notes TEXT,
     FOREIGN KEY (idea_id) REFERENCES trade_ideas (idea_id)
 );
+
+CREATE TABLE IF NOT EXISTS market_bars (
+    symbol TEXT NOT NULL,
+    interval TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    volume REAL,
+    source TEXT NOT NULL,
+    PRIMARY KEY (symbol, interval, timestamp)
+);
+
+CREATE TABLE IF NOT EXISTS runtime_state (
+    state_key TEXT PRIMARY KEY,
+    value_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

@@ -15,6 +15,19 @@ class Bar:
 
 
 @dataclass(frozen=True, slots=True)
+class MarketBar:
+    symbol: str
+    interval: str
+    ts: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float = 0.0
+    source: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class MarketSnapshot:
     symbol: str
     bars: list[Bar]

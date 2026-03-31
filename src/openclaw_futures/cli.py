@@ -10,6 +10,7 @@ from openclaw_futures.config import AppConfig
 from openclaw_futures.integrations.openclaw_contracts import build_trade_plan, idea_contract, reasoning_context_contract
 from openclaw_futures.providers.file_provider import FileMarketDataProvider
 from openclaw_futures.render.text_render import render_account, render_help, render_ideas, render_levels, render_plan, render_setups, render_stats
+from openclaw_futures.services.scanner import ScannerService
 from openclaw_futures.storage.db import connect
 from openclaw_futures.storage.ideas import create_trade_idea, list_trade_ideas, mark_invalidated, mark_skipped, mark_taken
 from openclaw_futures.storage.results import record_trade_result
@@ -27,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
 
     provider = FileMarketDataProvider(config.data_dir)
     connection = connect(config.db_path)
+    scanner = ScannerService(config, connection)
 
     if args.command == "help":
         print(render_help())
@@ -82,6 +84,35 @@ def main(argv: list[str] | None = None) -> int:
         stats = calculate_stats(connection)
         print(json.dumps(asdict(stats), indent=2) if args.json else render_stats(stats))
         return 0
+    if args.command == "sync":
+        if args.sync_command == "run":
+            payload = scanner.run_sync(
+                force_full_backfill=args.force_full_backfill,
+                days=args.days,
+                interval_override=args.interval_override,
+                symbol_override=args.symbol_override,
+            )
+            print(json.dumps(payload, indent=2) if args.json else payload["text"])
+            return 0
+        if args.sync_command == "status":
+            payload = scanner.get_sync_status(symbol=args.symbol)
+            print(json.dumps(payload, indent=2) if args.json else payload["text"])
+            return 0
+    if args.command == "scan":
+        if args.scan_command == "run":
+            payload = scanner.run_scan(
+                account_size=args.account_size,
+                persist_ideas=args.persist_ideas,
+                post_webhook_flag=args.post_webhook,
+                source_room=args.source_room or config.room_label,
+                allow_outside_window=args.allow_outside_window,
+            )
+            print(json.dumps(payload, indent=2) if args.json else payload["text"])
+            return 0
+        if args.scan_command == "status":
+            payload = scanner.get_scan_status(symbol=args.symbol)
+            print(json.dumps(payload, indent=2) if args.json else payload["text"])
+            return 0
     if args.command == "reasoning-context":
         plan = build_trade_plan(provider, args.account_size, args.symbols, source_room=config.room_label)
         stats = calculate_stats(connection)
@@ -152,6 +183,31 @@ def _build_parser() -> argparse.ArgumentParser:
 
     stats = subparsers.add_parser("stats")
     stats.add_argument("--json", action="store_true")
+
+    sync = subparsers.add_parser("sync")
+    sync_subparsers = sync.add_subparsers(dest="sync_command")
+    sync_run = sync_subparsers.add_parser("run")
+    sync_run.add_argument("--force-full-backfill", action="store_true")
+    sync_run.add_argument("--days", type=int)
+    sync_run.add_argument("--interval-override")
+    sync_run.add_argument("--symbol-override")
+    sync_run.add_argument("--json", action="store_true")
+    sync_status = sync_subparsers.add_parser("status")
+    sync_status.add_argument("--symbol")
+    sync_status.add_argument("--json", action="store_true")
+
+    scan = subparsers.add_parser("scan")
+    scan_subparsers = scan.add_subparsers(dest="scan_command")
+    scan_run = scan_subparsers.add_parser("run")
+    scan_run.add_argument("--account-size", type=float, default=10_000)
+    scan_run.add_argument("--persist-ideas", action="store_true")
+    scan_run.add_argument("--post-webhook", action="store_true")
+    scan_run.add_argument("--source-room")
+    scan_run.add_argument("--allow-outside-window", action="store_true")
+    scan_run.add_argument("--json", action="store_true")
+    scan_status = scan_subparsers.add_parser("status")
+    scan_status.add_argument("--symbol")
+    scan_status.add_argument("--json", action="store_true")
 
     reasoning = subparsers.add_parser("reasoning-context")
     reasoning.add_argument("--account-size", type=float, required=True)

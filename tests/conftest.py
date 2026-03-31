@@ -34,6 +34,17 @@ def config(fixture_dir: Path, db_path: Path) -> AppConfig:
         webhook_thread_id="",
         room_label="test-room",
         log_level="INFO",
+        twelvedata_api_key="test-key",
+        twelvedata_base_url="https://api.twelvedata.com",
+        backfill_days=10,
+        sync_start="08:00",
+        sync_end="13:00",
+        alert_start="08:30",
+        alert_end="11:30",
+        scan_interval_minutes=5,
+        allow_outside_window_manual_scan=True,
+        live_symbol="M6E",
+        live_symbol_map={"M6E": "EUR/USD"},
     )
 
 

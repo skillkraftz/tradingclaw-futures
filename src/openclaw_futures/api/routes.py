@@ -82,8 +82,8 @@ def account_handler(app, body: dict[str, object]) -> dict[str, object]:
 def plan_handler(app, body: dict[str, object]) -> dict[str, object]:
     account_size = float(body.get("account_size", 10_000))
     source_room = str(body.get("source_room", app.config.room_label))
-    persist_ideas = bool(body.get("persist_ideas", False))
-    post_webhook = bool(body.get("post_webhook", False))
+    persist_ideas = _as_bool(body.get("persist_ideas", False))
+    post_webhook = _as_bool(body.get("post_webhook", False))
     symbols = normalize_symbols(_as_symbols(body.get("symbols")))
     plan = build_trade_plan(app.provider, account_size, symbols, source_room=source_room)
     ideas = [create_trade_idea(app.connection, source_room=source_room, setup=setup) for setup in plan.setups] if persist_ideas else []
@@ -133,7 +133,7 @@ def take_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, object
     actions = list_actions(app.connection, idea_id)
     last_action = actions[-1] if actions else None
     payload["text"] = render_transition_summary(idea, last_action)
-    if bool(body.get("post_webhook", False)) and last_action is not None:
+    if _as_bool(body.get("post_webhook", False)) and last_action is not None:
         payload["webhook"] = post_message(app.config, render_webhook_transition(idea, last_action))
     return payload
 
@@ -144,7 +144,7 @@ def skip_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, object
     actions = list_actions(app.connection, idea_id)
     last_action = actions[-1] if actions else None
     payload["text"] = render_transition_summary(idea, last_action)
-    if bool(body.get("post_webhook", False)) and last_action is not None:
+    if _as_bool(body.get("post_webhook", False)) and last_action is not None:
         payload["webhook"] = post_message(app.config, render_webhook_transition(idea, last_action))
     return payload
 
@@ -155,7 +155,7 @@ def invalidate_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, 
     actions = list_actions(app.connection, idea_id)
     last_action = actions[-1] if actions else None
     payload["text"] = render_transition_summary(idea, last_action)
-    if bool(body.get("post_webhook", False)) and last_action is not None:
+    if _as_bool(body.get("post_webhook", False)) and last_action is not None:
         payload["webhook"] = post_message(app.config, render_webhook_transition(idea, last_action))
     return payload
 
@@ -173,7 +173,7 @@ def result_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, obje
     actions = list_actions(app.connection, idea_id)
     last_action = actions[-1] if actions else None
     payload["text"] = render_transition_summary(idea, last_action)
-    if bool(body.get("post_webhook", False)) and last_action is not None:
+    if _as_bool(body.get("post_webhook", False)) and last_action is not None:
         payload["webhook"] = post_message(app.config, render_webhook_transition(idea, last_action))
     return payload
 
@@ -196,9 +196,48 @@ def reasoning_context_handler(app, body: dict[str, object]) -> dict[str, object]
     }
 
 
+def sync_run_handler(app, body: dict[str, object]) -> dict[str, object]:
+    return app.scanner.run_sync(
+        force_full_backfill=_as_bool(body.get("force_full_backfill", False)),
+        days=int(body["days"]) if body.get("days") is not None else None,
+        interval_override=str(body["interval_override"]) if body.get("interval_override") else None,
+        symbol_override=str(body["symbol_override"]) if body.get("symbol_override") else None,
+    )
+
+
+def sync_status_handler(app, body: dict[str, object]) -> dict[str, object]:
+    symbol = str(body["symbol"]) if body.get("symbol") else None
+    return app.scanner.get_sync_status(symbol=symbol)
+
+
+def scan_run_handler(app, body: dict[str, object]) -> dict[str, object]:
+    return app.scanner.run_scan(
+        account_size=float(body.get("account_size", 10_000)),
+        persist_ideas=_as_bool(body.get("persist_ideas", False)),
+        post_webhook_flag=_as_bool(body.get("post_webhook", False)),
+        source_room=str(body.get("source_room", app.config.room_label)),
+        allow_outside_window=_as_bool(body["allow_outside_window"]) if body.get("allow_outside_window") is not None else None,
+    )
+
+
+def scan_status_handler(app, body: dict[str, object]) -> dict[str, object]:
+    symbol = str(body["symbol"]) if body.get("symbol") else None
+    return app.scanner.get_scan_status(symbol=symbol)
+
+
 def _as_symbols(raw: object) -> list[str] | None:
     if raw is None:
         return None
     if isinstance(raw, str):
         return [raw]
     return [str(item) for item in raw]
+
+
+def _as_bool(raw: object) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    if raw is None:
+        return False
+    return bool(raw)

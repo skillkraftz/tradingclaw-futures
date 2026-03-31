@@ -11,6 +11,7 @@ from wsgiref.simple_server import make_server
 from openclaw_futures.api import routes
 from openclaw_futures.config import AppConfig
 from openclaw_futures.providers.file_provider import FileMarketDataProvider
+from openclaw_futures.services.scanner import ScannerService
 from openclaw_futures.storage.db import connect
 
 
@@ -19,6 +20,7 @@ class TradingClawApp:
         self.config = config or AppConfig.from_env()
         self.provider = FileMarketDataProvider(self.config.data_dir)
         self.connection = connect(self.config.db_path)
+        self.scanner = ScannerService(self.config, self.connection)
 
     def __call__(self, environ, start_response):
         try:
@@ -57,6 +59,14 @@ class TradingClawApp:
             return 200, routes.plan_handler(self, body)
         if method == "GET" and path == "/ideas":
             return 200, routes.ideas_handler(self, body)
+        if method == "POST" and path == "/sync/run":
+            return 200, routes.sync_run_handler(self, body)
+        if method == "GET" and path == "/sync/status":
+            return 200, routes.sync_status_handler(self, body)
+        if method == "POST" and path == "/scan/run":
+            return 200, routes.scan_run_handler(self, body)
+        if method == "GET" and path == "/scan/status":
+            return 200, routes.scan_status_handler(self, body)
         match = re.fullmatch(r"/ideas/(\d+)", path)
         if method == "GET" and match:
             return 200, routes.idea_handler(self, int(match.group(1)), body)

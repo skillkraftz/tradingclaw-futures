@@ -53,6 +53,17 @@ def test_post_message_includes_thread_id_in_url(monkeypatch) -> None:
         webhook_thread_id="98765",
         room_label="desk",
         log_level="INFO",
+        twelvedata_api_key="test-key",
+        twelvedata_base_url="https://api.twelvedata.com",
+        backfill_days=10,
+        sync_start="08:00",
+        sync_end="13:00",
+        alert_start="08:30",
+        alert_end="11:30",
+        scan_interval_minutes=5,
+        allow_outside_window_manual_scan=True,
+        live_symbol="M6E",
+        live_symbol_map={"M6E": "EUR/USD"},
     )
 
     result = post_message(config, "hello")
@@ -72,6 +83,17 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         webhook_thread_id="",
         room_label="desk",
         log_level="INFO",
+        twelvedata_api_key="test-key",
+        twelvedata_base_url="https://api.twelvedata.com",
+        backfill_days=10,
+        sync_start="08:00",
+        sync_end="13:00",
+        alert_start="08:30",
+        alert_end="11:30",
+        scan_interval_minutes=5,
+        allow_outside_window_manual_scan=True,
+        live_symbol="M6E",
+        live_symbol_map={"M6E": "EUR/USD"},
     )
     assert post_message(disabled, "hello")["sent"] is False
 
@@ -89,6 +111,17 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         webhook_thread_id="thread-1",
         room_label="desk",
         log_level="INFO",
+        twelvedata_api_key="test-key",
+        twelvedata_base_url="https://api.twelvedata.com",
+        backfill_days=10,
+        sync_start="08:00",
+        sync_end="13:00",
+        alert_start="08:30",
+        alert_end="11:30",
+        scan_interval_minutes=5,
+        allow_outside_window_manual_scan=True,
+        live_symbol="M6E",
+        live_symbol_map={"M6E": "EUR/USD"},
     )
     result = post_message(failing, "hello")
     assert result["sent"] is False
@@ -112,6 +145,17 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
         webhook_thread_id="thread-1",
         room_label=app.config.room_label,
         log_level=app.config.log_level,
+        twelvedata_api_key=app.config.twelvedata_api_key,
+        twelvedata_base_url=app.config.twelvedata_base_url,
+        backfill_days=app.config.backfill_days,
+        sync_start=app.config.sync_start,
+        sync_end=app.config.sync_end,
+        alert_start=app.config.alert_start,
+        alert_end=app.config.alert_end,
+        scan_interval_minutes=app.config.scan_interval_minutes,
+        allow_outside_window_manual_scan=app.config.allow_outside_window_manual_scan,
+        live_symbol=app.config.live_symbol,
+        live_symbol_map=app.config.live_symbol_map,
     )
     monkeypatch.setattr("openclaw_futures.api.routes.post_message", fake_post_message)
 
@@ -130,6 +174,17 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
         webhook_thread_id="",
         room_label=app.config.room_label,
         log_level=app.config.log_level,
+        twelvedata_api_key=app.config.twelvedata_api_key,
+        twelvedata_base_url=app.config.twelvedata_base_url,
+        backfill_days=app.config.backfill_days,
+        sync_start=app.config.sync_start,
+        sync_end=app.config.sync_end,
+        alert_start=app.config.alert_start,
+        alert_end=app.config.alert_end,
+        scan_interval_minutes=app.config.scan_interval_minutes,
+        allow_outside_window_manual_scan=app.config.allow_outside_window_manual_scan,
+        live_symbol=app.config.live_symbol,
+        live_symbol_map=app.config.live_symbol_map,
     )
     monkeypatch.setattr("openclaw_futures.api.routes.post_message", post_message)
     _, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})

@@ -11,9 +11,11 @@ It is not a Discord bot, does not require a Discord token, does not modify `open
 - Deterministic 1:3 reward-to-risk setup generation
 - Stable invalidation and account sizing logic
 - File-backed market data provider
+- Twelve Data live sync loop for cached EUR/USD testing
 - Local HTTP API using Python stdlib `wsgiref`
 - Optional CLI for local debugging and admin actions
 - Persistent SQLite trade journal
+- Persistent SQLite market-bar cache for live sync testing
 - Optional webhook posting with `thread_id` support
 
 ## Fresh Install
@@ -42,9 +44,21 @@ TRADINGCLAW_WEBHOOK_URL=
 TRADINGCLAW_WEBHOOK_THREAD_ID=
 TRADINGCLAW_ROOM_LABEL=trading-room
 TRADINGCLAW_LOG_LEVEL=INFO
+TRADINGCLAW_TWELVEDATA_API_KEY=
+TRADINGCLAW_TWELVEDATA_BASE_URL=https://api.twelvedata.com
+TRADINGCLAW_LIVE_SYMBOL=M6E
+TRADINGCLAW_TWELVEDATA_M6E_SYMBOL=EUR/USD
+TRADINGCLAW_BACKFILL_DAYS=10
+TRADINGCLAW_SYNC_START=08:00
+TRADINGCLAW_SYNC_END=13:00
+TRADINGCLAW_ALERT_START=08:30
+TRADINGCLAW_ALERT_END=11:30
+TRADINGCLAW_SCAN_INTERVAL_MINUTES=5
+TRADINGCLAW_ALLOW_OUTSIDE_WINDOW_MANUAL_SCAN=true
 ```
 
 If `TRADINGCLAW_WEBHOOK_URL` is unset, TradingClaw still works fully in local-only mode.
+If `TRADINGCLAW_TWELVEDATA_API_KEY` is unset, the original file-backed endpoints still work, but live sync fails clearly when invoked.
 
 ## Start The API
 
@@ -119,6 +133,15 @@ Show journal stats:
 tradingclaw-futures stats
 ```
 
+Run live EUR/USD cache sync and scan status:
+
+```bash
+tradingclaw-futures sync run
+tradingclaw-futures sync status
+tradingclaw-futures scan run --persist-ideas
+tradingclaw-futures scan status
+```
+
 ## HTTP API
 
 Implemented endpoints:
@@ -137,6 +160,10 @@ Implemented endpoints:
 - `POST /ideas/{idea_id}/result`
 - `GET /stats`
 - `POST /reasoning-context`
+- `POST /sync/run`
+- `GET /sync/status`
+- `POST /scan/run`
+- `GET /scan/status`
 
 Health check:
 
@@ -198,6 +225,49 @@ curl -s 'http://127.0.0.1:8787/ideas?status=win&limit=10'
 curl -s http://127.0.0.1:8787/ideas/3
 curl -s http://127.0.0.1:8787/stats
 ```
+
+Live sync and scan:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/sync/run \
+  -H 'Content-Type: application/json' \
+  -d '{"days":10}'
+
+curl -s http://127.0.0.1:8787/sync/status
+
+curl -s -X POST http://127.0.0.1:8787/scan/run \
+  -H 'Content-Type: application/json' \
+  -d '{"account_size":10000,"persist_ideas":true,"allow_outside_window":true}'
+
+curl -s http://127.0.0.1:8787/scan/status
+```
+
+## Live EUR/USD Cache Loop
+
+TradingClaw now supports a stateful local cache for live EUR/USD testing through Twelve Data. This does not replace the file provider and it does not change the deterministic setup engine.
+
+- First live sync performs an initial backfill using `TRADINGCLAW_BACKFILL_DAYS` and stores bars in SQLite.
+- Later syncs append only missing bars from the latest cached timestamp for the active interval.
+- The cache prefers `1min` bars and falls back to `5min` bars if Twelve Data does not return usable `1min` data.
+- `scan` uses cached bars as the analysis input and builds the same deterministic `M6E` snapshot path used by the existing engine.
+- Current live testing is `EUR/USD` only, mapped to `M6E`.
+
+The live cache tables are:
+
+- `market_bars`
+- `runtime_state`
+
+### Sync Window vs Alert Window
+
+- Sync window controls when scheduled data refreshes should be considered active.
+- Alert window controls when new trade ideas may be persisted or webhook-posted without override.
+- Scans outside the alert window still run against cached data, but persistence and webhook actions are informational-only unless manual override is allowed.
+
+### Debugging Outside Normal Hours
+
+- Leave `TRADINGCLAW_ALLOW_OUTSIDE_WINDOW_MANUAL_SCAN=true` to allow manual `scan run` requests outside the alert window.
+- Use `POST /scan/run` with `"allow_outside_window": true` for one-off debugging even if the default config is more restrictive.
+- Sync status continues to show the configured sync window even when a manual sync is run outside that window.
 
 ## Idea Lifecycle
 
@@ -261,6 +331,7 @@ Implemented behavior:
   - `POST /ideas/{idea_id}/skip`
   - `POST /ideas/{idea_id}/invalidate`
   - `POST /ideas/{idea_id}/result`
+- `POST /scan/run` also supports optional `"post_webhook": true`, but webhook posting remains gated by the alert window unless manual override is allowed.
 
 ## Example OpenClaw Workflow
 
@@ -312,6 +383,8 @@ print(handle_command("tc result 42 win 86"))
 print(handle_command("tc stats"))
 ```
 
+OpenClaw can keep using the original deterministic plan endpoints for fixture-based workflows, or call the new sync/scan endpoints when testing the cached live EUR/USD loop locally.
+
 ## Troubleshooting
 
 Missing runtime directory:
@@ -324,10 +397,16 @@ Bad fixture data:
 - The file provider raises `ValueError` for malformed JSON or CSV fixtures.
 - Verify `TRADINGCLAW_DATA_DIR` and the expected `mcl_*` / `m6e_*` files.
 
+Missing Twelve Data API key:
+
+- Set `TRADINGCLAW_TWELVEDATA_API_KEY` before using `/sync/run` or `tradingclaw-futures sync run`.
+- The original file-backed `plan`, `setups`, and `reasoning-context` flows still work without it.
+
 Webhook unset:
 
 - Leave `TRADINGCLAW_WEBHOOK_URL=` blank for local-only mode.
 - `POST /plan` still succeeds; the webhook result reports `"sent": false`.
+- `POST /scan/run` still succeeds; the webhook result reports `"sent": false` or `"outside alert window"` depending on the request state.
 
 Port already in use:
 
@@ -337,6 +416,12 @@ Port already in use:
 Negative PnL on CLI:
 
 - Pass negative values as `--pnl-dollars=-22.5` to avoid shell ambiguity.
+
+Live sync and scan:
+
+- Run `POST /sync/run` before the first `POST /scan/run` so the SQLite cache has bars to analyze.
+- If Twelve Data returns empty or unsupported `1min` data, TradingClaw falls back to `5min` and records the active interval in `/sync/status`.
+- Sync and scan status are stored in SQLite `runtime_state`, so the latest summary survives process restarts.
 
 ## Notes
 
