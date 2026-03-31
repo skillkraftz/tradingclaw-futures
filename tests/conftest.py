@@ -32,6 +32,7 @@ def config(fixture_dir: Path, db_path: Path) -> AppConfig:
         db_path=db_path,
         webhook_url="",
         webhook_thread_id="",
+        webhook_user_agent="TradingClaw/0.1 (private use; local trading engine)",
         room_label="test-room",
         log_level="INFO",
         twelvedata_api_key="test-key",

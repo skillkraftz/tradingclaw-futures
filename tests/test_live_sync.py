@@ -135,6 +135,7 @@ def test_per_symbol_dedupe_and_manual_override(connection, fixture_dir, db_path)
         db_path=db_path,
         webhook_url="",
         webhook_thread_id="",
+        webhook_user_agent="TradingClaw/0.1 (private use; local trading engine)",
         room_label="desk",
         log_level="INFO",
         twelvedata_api_key="test-key",

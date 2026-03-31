@@ -30,6 +30,7 @@ class LiveSymbolProfile:
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = PACKAGE_ROOT / "data" / "fixtures"
 DEFAULT_DB_PATH = PACKAGE_ROOT / "data" / "runtime" / "tradingclaw.sqlite3"
+DEFAULT_WEBHOOK_USER_AGENT = "TradingClaw/0.1 (private use; local trading engine)"
 
 CONTRACT_SPECS: dict[str, ContractSpec] = {
     "MCL": ContractSpec(
@@ -133,6 +134,7 @@ class AppConfig:
     db_path: Path
     webhook_url: str
     webhook_thread_id: str
+    webhook_user_agent: str
     room_label: str
     log_level: str
     twelvedata_api_key: str
@@ -174,6 +176,7 @@ class AppConfig:
             db_path=Path(os.getenv("TRADINGCLAW_DB_PATH", str(DEFAULT_DB_PATH))),
             webhook_url=os.getenv("TRADINGCLAW_WEBHOOK_URL", ""),
             webhook_thread_id=os.getenv("TRADINGCLAW_WEBHOOK_THREAD_ID", ""),
+            webhook_user_agent=os.getenv("TRADINGCLAW_WEBHOOK_USER_AGENT", DEFAULT_WEBHOOK_USER_AGENT),
             room_label=os.getenv("TRADINGCLAW_ROOM_LABEL", "trading-room"),
             log_level=os.getenv("TRADINGCLAW_LOG_LEVEL", "INFO").upper(),
             twelvedata_api_key=os.getenv("TRADINGCLAW_TWELVEDATA_API_KEY", ""),

@@ -20,6 +20,7 @@ def test_openclaw_client_disabled_and_config() -> None:
         db_path=Path("data/runtime/test.sqlite3"),
         webhook_url="",
         webhook_thread_id="",
+        webhook_user_agent="TradingClaw/0.1 (private use; local trading engine)",
         room_label="desk",
         log_level="INFO",
         twelvedata_api_key="test-key",

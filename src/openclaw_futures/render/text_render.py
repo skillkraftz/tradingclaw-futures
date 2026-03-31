@@ -46,6 +46,7 @@ def render_help() -> str:
             "tradingclaw-futures sync status",
             "tradingclaw-futures scan run",
             "tradingclaw-futures scan status",
+            "tradingclaw-futures webhook test",
             "",
             "Idea IDs:",
             "Stable numeric IDs are assigned from SQLite when a plan is persisted.",

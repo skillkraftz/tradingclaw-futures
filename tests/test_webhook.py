@@ -51,6 +51,7 @@ def test_post_message_includes_thread_id_in_url(monkeypatch) -> None:
         db_path="unused",  # type: ignore[arg-type]
         webhook_url="https://example.com/webhook?wait=true",
         webhook_thread_id="98765",
+        webhook_user_agent="TradingClaw/0.1 (private use; local trading engine)",
         room_label="desk",
         log_level="INFO",
         twelvedata_api_key="test-key",
@@ -77,6 +78,8 @@ def test_post_message_includes_thread_id_in_url(monkeypatch) -> None:
     assert result["sent"] is True
     assert captured["url"] == "https://example.com/webhook?wait=true&thread_id=98765"
     assert captured["body"] == {"content": "hello"}
+    assert result["request_headers"]["User-Agent"] == "TradingClaw/0.1 (private use; local trading engine)"
+    assert result["request_headers"]["Accept"] == "application/json"
 
 
 def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture_dir, tmp_path) -> None:
@@ -88,6 +91,7 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         db_path=tmp_path / "db.sqlite3",
         webhook_url="",
         webhook_thread_id="",
+        webhook_user_agent="TradingClaw/0.1 (private use; local trading engine)",
         room_label="desk",
         log_level="INFO",
         twelvedata_api_key="test-key",
@@ -125,6 +129,7 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         db_path=tmp_path / "db.sqlite3",
         webhook_url="https://example.com/webhook",
         webhook_thread_id="thread-1",
+        webhook_user_agent="TradingClaw/0.1 (private use; local trading engine)",
         room_label="desk",
         log_level="INFO",
         twelvedata_api_key="test-key",
@@ -150,6 +155,7 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
     assert result["sent"] is False
     assert result["reason_code"] == "transport_error"
     assert "thread_id=thread-1" in result["url"]
+    assert result["request_headers"]["User-Agent"].startswith("TradingClaw/")
 
 
 def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
@@ -167,6 +173,7 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
         db_path=Path(str(app.config.db_path)),
         webhook_url="https://example.com/webhook",
         webhook_thread_id="thread-1",
+        webhook_user_agent=app.config.webhook_user_agent,
         room_label=app.config.room_label,
         log_level=app.config.log_level,
         twelvedata_api_key=app.config.twelvedata_api_key,
@@ -203,6 +210,7 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
         db_path=Path(str(app.config.db_path)),
         webhook_url="",
         webhook_thread_id="",
+        webhook_user_agent=app.config.webhook_user_agent,
         room_label=app.config.room_label,
         log_level=app.config.log_level,
         twelvedata_api_key=app.config.twelvedata_api_key,
@@ -260,6 +268,7 @@ def test_webhook_http_error_returns_structured_diagnostics(monkeypatch, fixture_
         db_path=tmp_path / "db.sqlite3",
         webhook_url="https://example.com/webhook",
         webhook_thread_id="bad",
+        webhook_user_agent="TradingClaw/0.1 (private use; local trading engine)",
         room_label="desk",
         log_level="INFO",
         twelvedata_api_key="test-key",
@@ -285,3 +294,53 @@ def test_webhook_http_error_returns_structured_diagnostics(monkeypatch, fixture_
     assert result["sent"] is False
     assert result["attempted"] is True
     assert result["reason_code"] == "invalid_thread_id"
+    assert result["status"] == 400
+    assert "invalid thread_id" in result["body"]
+    assert result["request_headers"]["Accept"] == "application/json"
+
+
+def test_webhook_cloudflare_error_is_classified(monkeypatch, fixture_dir, tmp_path) -> None:
+    def fake_urlopen(_http_request, timeout=None):
+        raise __import__("urllib.error").error.HTTPError(
+            url="https://example.com/webhook",
+            code=403,
+            msg="Forbidden",
+            hdrs={"server": "cloudflare"},
+            fp=__import__("io").BytesIO(b"<html>Error code 1010 Access denied Cloudflare</html>"),
+        )
+
+    monkeypatch.setattr("openclaw_futures.integrations.webhook.request.urlopen", fake_urlopen)
+    config = AppConfig(
+        host="127.0.0.1",
+        port=8787,
+        data_dir=fixture_dir,
+        default_provider="file",
+        db_path=tmp_path / "db.sqlite3",
+        webhook_url="https://example.com/webhook",
+        webhook_thread_id="",
+        webhook_user_agent="TradingClaw/0.1 (private use; local trading engine)",
+        room_label="desk",
+        log_level="INFO",
+        twelvedata_api_key="test-key",
+        twelvedata_base_url="https://api.twelvedata.com",
+        backfill_days=10,
+        sync_start="08:00",
+        sync_end="13:00",
+        alert_start="08:30",
+        alert_end="11:30",
+        scan_interval_minutes=5,
+        allow_outside_window_manual_scan=True,
+        live_symbol="M6E",
+        live_symbol_map={"M6E": "EUR/USD"},
+        twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
+        primary_symbol="EUR/USD",
+        openclaw_enabled=False,
+        openclaw_base_url="http://127.0.0.1:18789",
+        openclaw_reasoning_path="",
+        openclaw_auth_token="",
+        openclaw_auth_header="Authorization",
+    )
+    result = post_message(config, "hello")
+    assert result["sent"] is False
+    assert result["reason_code"] == "cloudflare_block"
+    assert result["response_headers"]["server"] == "cloudflare"

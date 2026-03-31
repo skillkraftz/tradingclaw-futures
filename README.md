@@ -18,6 +18,7 @@ It is not a Discord bot, does not require a Discord token, does not modify `open
 - Persistent SQLite market-bar cache for live sync testing
 - Optional OpenClaw gateway client for reasoning handoff
 - Optional webhook posting with `thread_id` support
+- Explicit webhook request headers with configurable `User-Agent`
 
 ## Fresh Install
 
@@ -43,6 +44,7 @@ TRADINGCLAW_DEFAULT_PROVIDER=file
 TRADINGCLAW_DB_PATH=./data/runtime/tradingclaw.sqlite3
 TRADINGCLAW_WEBHOOK_URL=
 TRADINGCLAW_WEBHOOK_THREAD_ID=
+TRADINGCLAW_WEBHOOK_USER_AGENT=TradingClaw/0.1 (private use; local trading engine)
 TRADINGCLAW_ROOM_LABEL=trading-room
 TRADINGCLAW_LOG_LEVEL=INFO
 TRADINGCLAW_TWELVEDATA_API_KEY=
@@ -166,6 +168,12 @@ tradingclaw-futures sync run
 tradingclaw-futures sync status
 tradingclaw-futures scan run --persist-ideas
 tradingclaw-futures scan status
+```
+
+Send a direct webhook transport test:
+
+```bash
+tradingclaw-futures webhook test --message "TradingClaw webhook test"
 ```
 
 Use the local OpenClaw bridge helper:
@@ -378,13 +386,17 @@ Implemented behavior:
 
 - When no webhook URL is configured, TradingClaw returns a structured `"sent": false` webhook result and still completes the plan request.
 - When `TRADINGCLAW_WEBHOOK_THREAD_ID` is set, TradingClaw appends `thread_id=...` to the webhook URL.
+- TradingClaw sends explicit webhook headers: `User-Agent`, `Accept: application/json`, and `Content-Type: application/json`.
+- Override the default user agent with `TRADINGCLAW_WEBHOOK_USER_AGENT` when you need to test a different client signature.
 - The webhook payload contains rendered text only. It does not alter journal state.
+- Webhook failures include structured diagnostics such as `reason_code`, HTTP status, response body, response headers, resolved URL, and request headers.
 - Lifecycle endpoints also support optional `"post_webhook": true`:
   - `POST /ideas/{idea_id}/take`
   - `POST /ideas/{idea_id}/skip`
   - `POST /ideas/{idea_id}/invalidate`
   - `POST /ideas/{idea_id}/result`
 - `POST /scan/run` also supports optional `"post_webhook": true`, but webhook posting remains gated by the alert window unless manual override is allowed.
+- `tradingclaw-futures webhook test` uses the same transport path as production webhook posts and is the fastest way to compare TradingClaw against a working `curl` control test.
 
 ## Example OpenClaw Workflow
 

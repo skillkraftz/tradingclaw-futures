@@ -8,6 +8,7 @@ from dataclasses import asdict
 from openclaw_futures.api.app import run_server
 from openclaw_futures.config import AppConfig
 from openclaw_futures.integrations.openclaw_contracts import build_trade_plan, idea_contract, reasoning_context_contract
+from openclaw_futures.integrations.webhook import post_message
 from openclaw_futures.providers.file_provider import FileMarketDataProvider
 from openclaw_futures.render.text_render import render_account, render_help, render_ideas, render_levels, render_plan, render_setups, render_stats
 from openclaw_futures.services.scanner import ScannerService
@@ -84,6 +85,11 @@ def main(argv: list[str] | None = None) -> int:
         stats = calculate_stats(connection)
         print(json.dumps(asdict(stats), indent=2) if args.json else render_stats(stats))
         return 0
+    if args.command == "webhook":
+        if args.webhook_command == "test":
+            payload = post_message(config, args.message)
+            print(json.dumps(payload, indent=2))
+            return 0
     if args.command == "sync":
         if args.sync_command == "run":
             payload = scanner.run_sync(
@@ -183,6 +189,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     stats = subparsers.add_parser("stats")
     stats.add_argument("--json", action="store_true")
+
+    webhook = subparsers.add_parser("webhook")
+    webhook_subparsers = webhook.add_subparsers(dest="webhook_command")
+    webhook_test = webhook_subparsers.add_parser("test")
+    webhook_test.add_argument("--message", default="TradingClaw webhook test")
 
     sync = subparsers.add_parser("sync")
     sync_subparsers = sync.add_subparsers(dest="sync_command")

@@ -22,3 +22,16 @@ def test_cli_reasoning_context_json(tmp_path, fixture_dir, monkeypatch, capsys) 
     assert exit_code == 0
     assert payload["requested_symbols"] == ["MCL"]
     assert "valid_setups" in payload
+
+
+def test_cli_webhook_test_outputs_result(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "openclaw_futures.cli.post_message",
+        lambda _config, message: {"sent": False, "reason_code": "webhook_disabled", "message": message},
+    )
+    exit_code = main(["webhook", "test", "--message", "ping"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["reason_code"] == "webhook_disabled"
+    assert payload["message"] == "ping"
