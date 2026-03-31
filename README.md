@@ -88,6 +88,8 @@ Generate and persist a plan:
 tradingclaw-futures plan --account-size 10000 --persist
 ```
 
+API note: `POST /plan` is preview-only by default. Persisting ideas requires `"persist_ideas": true`.
+
 Inspect persisted ideas:
 
 ```bash
@@ -128,6 +130,7 @@ Implemented endpoints:
 - `POST /account`
 - `POST /plan`
 - `GET /ideas`
+- `GET /ideas/{idea_id}`
 - `POST /ideas/{idea_id}/take`
 - `POST /ideas/{idea_id}/skip`
 - `POST /ideas/{idea_id}/invalidate`
@@ -153,6 +156,14 @@ Plan generation with persistence:
 curl -s -X POST http://127.0.0.1:8787/plan \
   -H 'Content-Type: application/json' \
   -d '{"account_size":10000,"persist_ideas":true}'
+```
+
+Plan preview without persistence:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"account_size":10000}'
 ```
 
 Reasoning context:
@@ -183,12 +194,15 @@ List ideas and stats:
 
 ```bash
 curl -s http://127.0.0.1:8787/ideas
+curl -s 'http://127.0.0.1:8787/ideas?status=win&limit=10'
+curl -s http://127.0.0.1:8787/ideas/3
 curl -s http://127.0.0.1:8787/stats
 ```
 
 ## Idea Lifecycle
 
 Persisted ideas use stable numeric `idea_id` values from SQLite.
+Repeated `POST /plan` calls with `"persist_ideas": true` use a simple deterministic dedupe for identical still-proposed ideas from the same day and `source_room`.
 
 Supported transitions:
 
@@ -242,6 +256,11 @@ Implemented behavior:
 - When no webhook URL is configured, TradingClaw returns a structured `"sent": false` webhook result and still completes the plan request.
 - When `TRADINGCLAW_WEBHOOK_THREAD_ID` is set, TradingClaw appends `thread_id=...` to the webhook URL.
 - The webhook payload contains rendered text only. It does not alter journal state.
+- Lifecycle endpoints also support optional `"post_webhook": true`:
+  - `POST /ideas/{idea_id}/take`
+  - `POST /ideas/{idea_id}/skip`
+  - `POST /ideas/{idea_id}/invalidate`
+  - `POST /ideas/{idea_id}/result`
 
 ## Example OpenClaw Workflow
 

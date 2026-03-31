@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from openclaw_futures.config import CONTRACT_SPECS
-from openclaw_futures.models import AccountPlan, MarketSnapshot, RejectedSetup, SetupCandidate, StatsSummary, TradeIdea, TradePlan
+from openclaw_futures.models import AccountPlan, MarketSnapshot, RejectedSetup, SetupCandidate, StatsSummary, TradeAction, TradeIdea, TradePlan
 
 
 def render_help() -> str:
@@ -21,6 +21,7 @@ def render_help() -> str:
             "POST /account",
             "POST /plan",
             "GET /ideas",
+            "GET /ideas/{idea_id}",
             "POST /ideas/{idea_id}/take",
             "POST /ideas/{idea_id}/skip",
             "POST /ideas/{idea_id}/invalidate",
@@ -117,6 +118,33 @@ def render_ideas(ideas: list[TradeIdea]) -> str:
     return "\n".join(lines)
 
 
+def render_idea_detail(idea: TradeIdea, actions: list[TradeAction]) -> str:
+    lines = [
+        "TradingClaw Idea",
+        _idea_line(idea),
+    ]
+    if actions:
+        lines.append("Actions:")
+        lines.extend(_action_line(action) for action in actions)
+    return "\n".join(lines)
+
+
+def render_transition_summary(idea: TradeIdea, action: TradeAction | None = None) -> str:
+    line = f"idea_id={idea.idea_id} | {idea.symbol} {idea.bias} | status {idea.status}"
+    if action is None:
+        return line
+    suffix = [f"action {action.action_type}"]
+    if action.contracts is not None:
+        suffix.append(f"contracts {action.contracts}")
+    if action.entry_fill is not None:
+        suffix.append(f"entry {action.entry_fill}")
+    if action.exit_fill is not None:
+        suffix.append(f"exit {action.exit_fill}")
+    if action.pnl_dollars is not None:
+        suffix.append(f"pnl ${action.pnl_dollars:.2f}")
+    return f"{line} | {' | '.join(suffix)}"
+
+
 def render_stats(stats: StatsSummary) -> str:
     return "\n".join(
         [
@@ -162,3 +190,18 @@ def _idea_line(idea: TradeIdea) -> str:
         f" | RR {idea.rr:.2f}"
         f" | status {idea.status}"
     )
+
+
+def _action_line(action: TradeAction) -> str:
+    parts = [f"{action.action_type} @ {action.acted_at}"]
+    if action.contracts is not None:
+        parts.append(f"contracts {action.contracts}")
+    if action.entry_fill is not None:
+        parts.append(f"entry {action.entry_fill}")
+    if action.exit_fill is not None:
+        parts.append(f"exit {action.exit_fill}")
+    if action.pnl_dollars is not None:
+        parts.append(f"pnl ${action.pnl_dollars:.2f}")
+    if action.notes:
+        parts.append(action.notes)
+    return " | ".join(parts)

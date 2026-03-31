@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+from conftest import call_app
 
 from openclaw_futures.config import AppConfig
 from openclaw_futures.integrations.openclaw_contracts import build_trade_plan
@@ -90,3 +93,55 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
     result = post_message(failing, "hello")
     assert result["sent"] is False
     assert "thread_id=thread-1" in result["url"]
+
+
+def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
+    captured: list[tuple[str, str]] = []
+
+    def fake_post_message(config, content):
+        captured.append((config.webhook_url, content))
+        return {"enabled": True, "sent": True}
+
+    app.config = AppConfig(
+        host=app.config.host,
+        port=app.config.port,
+        data_dir=app.config.data_dir,
+        default_provider=app.config.default_provider,
+        db_path=Path(str(app.config.db_path)),
+        webhook_url="https://example.com/webhook",
+        webhook_thread_id="thread-1",
+        room_label=app.config.room_label,
+        log_level=app.config.log_level,
+    )
+    monkeypatch.setattr("openclaw_futures.api.routes.post_message", fake_post_message)
+
+    _, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})
+    first, second = payload["idea_ids"]
+    take_status, take_payload = call_app(app, "POST", f"/ideas/{first}/take", {"contracts": 1, "post_webhook": True})
+    skip_status, skip_payload = call_app(app, "POST", f"/ideas/{second}/skip", {"post_webhook": True})
+
+    app.config = AppConfig(
+        host=app.config.host,
+        port=app.config.port,
+        data_dir=app.config.data_dir,
+        default_provider=app.config.default_provider,
+        db_path=Path(str(app.config.db_path)),
+        webhook_url="",
+        webhook_thread_id="",
+        room_label=app.config.room_label,
+        log_level=app.config.log_level,
+    )
+    monkeypatch.setattr("openclaw_futures.api.routes.post_message", post_message)
+    _, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})
+    third = payload["idea_ids"][0]
+    disabled_status, disabled_payload = call_app(app, "POST", f"/ideas/{third}/invalidate", {"post_webhook": True})
+
+    assert take_status == 200
+    assert skip_status == 200
+    assert disabled_status == 200
+    assert "webhook" in take_payload
+    assert "webhook" in skip_payload
+    assert disabled_payload["webhook"]["sent"] is False
+    assert len(captured) == 2
+    assert "status taken" in captured[0][1]
+    assert "status skipped" in captured[1][1]

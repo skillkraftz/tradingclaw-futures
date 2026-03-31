@@ -5,6 +5,7 @@ import json
 import re
 import errno
 import sys
+from urllib import parse
 from wsgiref.simple_server import make_server
 
 from openclaw_futures.api import routes
@@ -56,6 +57,9 @@ class TradingClawApp:
             return 200, routes.plan_handler(self, body)
         if method == "GET" and path == "/ideas":
             return 200, routes.ideas_handler(self, body)
+        match = re.fullmatch(r"/ideas/(\d+)", path)
+        if method == "GET" and match:
+            return 200, routes.idea_handler(self, int(match.group(1)), body)
         if method == "GET" and path == "/stats":
             return 200, routes.stats_handler(self, body)
         if method == "POST" and path == "/reasoning-context":
@@ -100,14 +104,32 @@ def run_server(config: AppConfig | None = None) -> None:
 
 def _read_body(environ) -> dict[str, object]:
     if environ["REQUEST_METHOD"].upper() == "GET":
-        return {}
+        return _read_query_string(environ)
     content_length = int(environ.get("CONTENT_LENGTH") or 0)
     if content_length <= 0:
         return {}
     raw = environ["wsgi.input"].read(content_length)
     if not raw:
+        return _read_query_string(environ)
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("JSON body must be an object")
+    if environ.get("QUERY_STRING"):
+        query = _read_query_string(environ)
+        query.update(payload)
+        return query
+    return payload
+
+
+def _read_query_string(environ) -> dict[str, object]:
+    raw_query = environ.get("QUERY_STRING", "")
+    if not raw_query:
         return {}
-    return json.loads(raw.decode("utf-8"))
+    parsed = parse.parse_qs(raw_query, keep_blank_values=True)
+    query: dict[str, object] = {}
+    for key, values in parsed.items():
+        query[key] = values if len(values) > 1 else values[0]
+    return query
 
 
 def _reason(status_code: int) -> str:

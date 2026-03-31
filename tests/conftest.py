@@ -54,7 +54,13 @@ def app(config: AppConfig) -> TradingClawApp:
     return TradingClawApp(config)
 
 
-def call_app(app: TradingClawApp, method: str, path: str, payload: dict[str, object] | None = None) -> tuple[int, dict[str, object]]:
+def call_app(
+    app: TradingClawApp,
+    method: str,
+    path: str,
+    payload: dict[str, object] | None = None,
+    query_string: str = "",
+) -> tuple[int, dict[str, object]]:
     raw = json.dumps(payload or {}).encode("utf-8")
     status_headers: dict[str, object] = {}
 
@@ -65,6 +71,7 @@ def call_app(app: TradingClawApp, method: str, path: str, payload: dict[str, obj
     environ = {
         "REQUEST_METHOD": method,
         "PATH_INFO": path,
+        "QUERY_STRING": query_string,
         "CONTENT_LENGTH": str(len(raw) if method != "GET" else 0),
         "wsgi.input": io.BytesIO(raw),
     }

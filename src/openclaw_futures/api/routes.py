@@ -15,9 +15,27 @@ from openclaw_futures.integrations.openclaw_contracts import (
 )
 from openclaw_futures.integrations.webhook import post_message
 from openclaw_futures.render.assistant_render import render_assistant_ideas, render_assistant_setups
-from openclaw_futures.render.text_render import render_account, render_help, render_ideas, render_levels, render_plan, render_setups, render_stats
-from openclaw_futures.render.webhook_render import render_webhook_plan
-from openclaw_futures.storage.ideas import create_trade_idea, list_trade_ideas, mark_invalidated, mark_skipped, mark_taken
+from openclaw_futures.render.text_render import (
+    render_account,
+    render_help,
+    render_idea_detail,
+    render_ideas,
+    render_levels,
+    render_plan,
+    render_setups,
+    render_stats,
+    render_transition_summary,
+)
+from openclaw_futures.render.webhook_render import render_webhook_plan, render_webhook_transition
+from openclaw_futures.storage.ideas import (
+    create_trade_idea,
+    get_trade_idea_with_actions,
+    list_actions,
+    list_trade_ideas,
+    mark_invalidated,
+    mark_skipped,
+    mark_taken,
+)
 from openclaw_futures.storage.results import record_trade_result
 from openclaw_futures.storage.stats import calculate_stats
 
@@ -64,13 +82,14 @@ def account_handler(app, body: dict[str, object]) -> dict[str, object]:
 def plan_handler(app, body: dict[str, object]) -> dict[str, object]:
     account_size = float(body.get("account_size", 10_000))
     source_room = str(body.get("source_room", app.config.room_label))
-    persist_ideas = bool(body.get("persist_ideas", True))
+    persist_ideas = bool(body.get("persist_ideas", False))
     post_webhook = bool(body.get("post_webhook", False))
     symbols = normalize_symbols(_as_symbols(body.get("symbols")))
     plan = build_trade_plan(app.provider, account_size, symbols, source_room=source_room)
     ideas = [create_trade_idea(app.connection, source_room=source_room, setup=setup) for setup in plan.setups] if persist_ideas else []
     payload: dict[str, object] = {
         "plan": plan_contract(plan),
+        "persisted": persist_ideas,
         "idea_ids": [idea.idea_id for idea in ideas],
         "ideas": [idea_contract(idea) for idea in ideas],
         "text": render_plan(plan, ideas),
@@ -90,6 +109,18 @@ def ideas_handler(app, body: dict[str, object]) -> dict[str, object]:
     }
 
 
+def idea_handler(app, idea_id: int, _body: dict[str, object]) -> dict[str, object]:
+    try:
+        idea, actions = get_trade_idea_with_actions(app.connection, idea_id)
+    except ValueError as exc:
+        raise FileNotFoundError(str(exc)) from exc
+    return {
+        "idea": idea_contract(idea),
+        "actions": [asdict(action) for action in actions],
+        "text": render_idea_detail(idea, actions),
+    }
+
+
 def take_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, object]:
     idea = mark_taken(
         app.connection,
@@ -98,30 +129,53 @@ def take_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, object
         entry_fill=body.get("entry_fill"),
         notes=body.get("notes"),
     )
-    return {"idea": idea_contract(idea)}
+    payload: dict[str, object] = {"idea": idea_contract(idea)}
+    actions = list_actions(app.connection, idea_id)
+    last_action = actions[-1] if actions else None
+    payload["text"] = render_transition_summary(idea, last_action)
+    if bool(body.get("post_webhook", False)) and last_action is not None:
+        payload["webhook"] = post_message(app.config, render_webhook_transition(idea, last_action))
+    return payload
 
 
 def skip_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, object]:
-    return {"idea": idea_contract(mark_skipped(app.connection, idea_id, notes=body.get("notes")))}
+    idea = mark_skipped(app.connection, idea_id, notes=body.get("notes"))
+    payload: dict[str, object] = {"idea": idea_contract(idea)}
+    actions = list_actions(app.connection, idea_id)
+    last_action = actions[-1] if actions else None
+    payload["text"] = render_transition_summary(idea, last_action)
+    if bool(body.get("post_webhook", False)) and last_action is not None:
+        payload["webhook"] = post_message(app.config, render_webhook_transition(idea, last_action))
+    return payload
 
 
 def invalidate_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, object]:
-    return {"idea": idea_contract(mark_invalidated(app.connection, idea_id, notes=body.get("notes")))}
+    idea = mark_invalidated(app.connection, idea_id, notes=body.get("notes"))
+    payload: dict[str, object] = {"idea": idea_contract(idea)}
+    actions = list_actions(app.connection, idea_id)
+    last_action = actions[-1] if actions else None
+    payload["text"] = render_transition_summary(idea, last_action)
+    if bool(body.get("post_webhook", False)) and last_action is not None:
+        payload["webhook"] = post_message(app.config, render_webhook_transition(idea, last_action))
+    return payload
 
 
 def result_handler(app, idea_id: int, body: dict[str, object]) -> dict[str, object]:
-    return {
-        "idea": idea_contract(
-            record_trade_result(
-                app.connection,
-                idea_id,
-                result=str(body["result"]),
-                exit_fill=body.get("exit_fill"),
-                pnl_dollars=body.get("pnl_dollars"),
-                notes=body.get("notes"),
-            )
-        )
-    }
+    idea = record_trade_result(
+        app.connection,
+        idea_id,
+        result=str(body["result"]),
+        exit_fill=body.get("exit_fill"),
+        pnl_dollars=body.get("pnl_dollars"),
+        notes=body.get("notes"),
+    )
+    payload: dict[str, object] = {"idea": idea_contract(idea)}
+    actions = list_actions(app.connection, idea_id)
+    last_action = actions[-1] if actions else None
+    payload["text"] = render_transition_summary(idea, last_action)
+    if bool(body.get("post_webhook", False)) and last_action is not None:
+        payload["webhook"] = post_message(app.config, render_webhook_transition(idea, last_action))
+    return payload
 
 
 def stats_handler(app, _body: dict[str, object]) -> dict[str, object]:

@@ -18,7 +18,17 @@ from openclaw_futures.models import (
 )
 
 
-def create_trade_idea(connection: sqlite3.Connection, *, source_room: str, setup) -> TradeIdea:
+def create_trade_idea(
+    connection: sqlite3.Connection,
+    *,
+    source_room: str,
+    setup,
+    dedupe_today: bool = True,
+) -> TradeIdea:
+    if dedupe_today:
+        existing = _find_duplicate_idea(connection, source_room=source_room, setup=setup)
+        if existing is not None:
+            return existing
     notes_json = json.dumps(
         {
             "notes": list(setup.notes),
@@ -73,6 +83,11 @@ def get_trade_idea(connection: sqlite3.Connection, idea_id: int) -> TradeIdea:
     if row is None:
         raise ValueError(f"unknown idea_id={idea_id}")
     return _row_to_idea(row)
+
+
+def get_trade_idea_with_actions(connection: sqlite3.Connection, idea_id: int) -> tuple[TradeIdea, list[TradeAction]]:
+    idea = get_trade_idea(connection, idea_id)
+    return idea, list_actions(connection, idea_id)
 
 
 def mark_taken(
@@ -197,3 +212,39 @@ def _row_to_action(row: sqlite3.Row) -> TradeAction:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _find_duplicate_idea(connection: sqlite3.Connection, *, source_room: str, setup) -> TradeIdea | None:
+    today = _now()[:10]
+    row = connection.execute(
+        """
+        SELECT * FROM trade_ideas
+        WHERE substr(created_at, 1, 10) = ?
+          AND source_room = ?
+          AND symbol = ?
+          AND setup_type = ?
+          AND bias = ?
+          AND entry_min = ?
+          AND entry_max = ?
+          AND stop = ?
+          AND target = ?
+          AND status = ?
+        ORDER BY idea_id DESC
+        LIMIT 1
+        """,
+        (
+            today,
+            source_room,
+            setup.symbol,
+            setup.setup_type,
+            setup.bias,
+            setup.entry_min,
+            setup.entry_max,
+            setup.stop,
+            setup.target,
+            IDEA_STATUS_PROPOSED,
+        ),
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_idea(row)

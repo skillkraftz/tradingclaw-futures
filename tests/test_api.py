@@ -55,6 +55,27 @@ def test_plan_and_idea_lifecycle(app) -> None:
     assert result_payload["idea"]["status"] == "win"
 
 
+def test_plan_does_not_persist_by_default(app) -> None:
+    status, payload = call_app(app, "POST", "/plan", {"account_size": 10000})
+    ideas_status, ideas_payload = call_app(app, "GET", "/ideas")
+    assert status == 200
+    assert payload["persisted"] is False
+    assert payload["idea_ids"] == []
+    assert ideas_status == 200
+    assert ideas_payload["ideas"] == []
+
+
+def test_plan_persistence_and_simple_dedupe(app) -> None:
+    first_status, first_payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})
+    second_status, second_payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})
+    ideas_status, ideas_payload = call_app(app, "GET", "/ideas")
+    assert first_status == 200
+    assert second_status == 200
+    assert first_payload["idea_ids"] == second_payload["idea_ids"]
+    assert ideas_status == 200
+    assert len(ideas_payload["ideas"]) == 2
+
+
 def test_skip_and_invalidate_endpoints(app) -> None:
     _, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})
     first, second = payload["idea_ids"]
@@ -64,6 +85,30 @@ def test_skip_and_invalidate_endpoints(app) -> None:
     assert skip_payload["idea"]["status"] == "skipped"
     assert invalidate_status == 200
     assert invalidate_payload["idea"]["status"] == "invalidated"
+
+
+def test_get_ideas_query_string_and_single_idea_endpoint(app) -> None:
+    _, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})
+    first, second = payload["idea_ids"]
+    call_app(app, "POST", f"/ideas/{first}/take", {"contracts": 1})
+    call_app(app, "POST", f"/ideas/{first}/result", {"result": "win", "pnl_dollars": 67.5})
+    call_app(app, "POST", f"/ideas/{second}/skip", {"notes": "pass"})
+
+    taken_status, taken_payload = call_app(app, "GET", "/ideas", query_string="status=win&limit=1")
+    detail_status, detail_payload = call_app(app, "GET", f"/ideas/{first}")
+    missing_status, missing_payload = call_app(app, "GET", "/ideas/999")
+    invalid_status, invalid_payload = call_app(app, "GET", "/ideas/not-a-number")
+
+    assert taken_status == 200
+    assert len(taken_payload["ideas"]) == 1
+    assert taken_payload["ideas"][0]["status"] == "win"
+    assert detail_status == 200
+    assert detail_payload["idea"]["idea_id"] == first
+    assert detail_payload["actions"]
+    assert missing_status == 404
+    assert "unknown idea_id" in missing_payload["error"]
+    assert invalid_status == 404
+    assert "unknown route" in invalid_payload["error"]
 
 
 def test_reasoning_context_response_shape(app) -> None:

@@ -44,8 +44,8 @@ def test_all_status_transitions(connection, provider) -> None:
     plan = build_trade_plan(provider, 10000, source_room="desk")
     first = create_trade_idea(connection, source_room="desk", setup=plan.setups[0])
     second = create_trade_idea(connection, source_room="desk", setup=plan.setups[1])
-    third = create_trade_idea(connection, source_room="desk", setup=plan.setups[0])
-    fourth = create_trade_idea(connection, source_room="desk", setup=plan.setups[1])
+    third = create_trade_idea(connection, source_room="desk", setup=plan.setups[0], dedupe_today=False)
+    fourth = create_trade_idea(connection, source_room="desk", setup=plan.setups[1], dedupe_today=False)
 
     assert mark_skipped(connection, first.idea_id, notes="pass").status == "skipped"
     assert mark_invalidated(connection, second.idea_id, notes="invalid").status == "invalidated"
