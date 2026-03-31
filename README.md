@@ -446,23 +446,39 @@ The bridge always calls TradingClaw over HTTP. If OpenClaw integration is enable
 
 ## OpenClaw Command Integration
 
-TradingClaw also provides a strict local command adapter for OpenClaw-side tool use in:
+The intended OpenClaw usage is now a single strict command entrypoint:
 
-- `src/openclaw_futures/integrations/openclaw_adapter.py`
+- `scripts/tc_command.py`
 
-Primary entrypoint:
+Workflow:
 
-- `handle_command(command: str) -> str`
+1. A Discord user types `tc ...`
+2. OpenClaw passes the command tail to `scripts/tc_command.py`
+3. TradingClaw calls its own local HTTP API
+4. TradingClaw returns actual backend output only
+
+Examples:
+
+```bash
+python3 scripts/tc_command.py "help"
+python3 scripts/tc_command.py "sync run"
+python3 scripts/tc_command.py "scan test 1500"
+python3 scripts/tc_command.py "ideas"
+python3 scripts/tc_command.py "idea 3"
+python3 scripts/tc_command.py "result 3 win 50"
+```
 
 Supported command forms:
 
 ```text
-tc plan 1500
+tc help
+tc sync run
+tc sync status
+tc scan status
+tc scan test [account_size]
 tc ideas
-tc idea 42
-tc take 42 1
-tc skip 42
-tc result 42 win 86
+tc idea <idea_id>
+tc result <idea_id> <win|loss|breakeven> [pnl_dollars]
 tc stats
 ```
 
@@ -470,23 +486,17 @@ Behavior:
 
 - Parsing is strict and deterministic.
 - No LLM or natural language parsing is used inside TradingClaw.
-- The adapter calls the existing local TradingClaw API dispatch layer and returns clean text output.
+- `tc scan test` is an off-hours manual test shortcut. It automatically enables outside-window override, idea persistence, and webhook posting.
+- Output is compact and Discord-friendly: real idea IDs, real symbols, and real alert state, with no generic coaching text.
 
-Examples:
+Examples of the intended Discord-facing pattern:
 
-```python
-from openclaw_futures.integrations.openclaw_adapter import handle_command
-
-print(handle_command("tc plan 1500"))
-print(handle_command("tc ideas"))
-print(handle_command("tc idea 42"))
-print(handle_command("tc take 42 1"))
-print(handle_command("tc skip 42"))
-print(handle_command("tc result 42 win 86"))
-print(handle_command("tc stats"))
-```
-
-OpenClaw can keep using the original deterministic plan endpoints for fixture-based workflows, or call the new sync/scan endpoints when testing the cached live watchlist loop locally.
+- `tc help`
+- `tc sync run`
+- `tc scan test 1500`
+- `tc ideas`
+- `tc idea 3`
+- `tc result 3 win 50`
 
 ## Troubleshooting
 
