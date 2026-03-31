@@ -270,6 +270,48 @@ Implemented behavior:
 4. OpenClaw presents that output directly, or forwards the reasoning-context payload to Codex for explanation.
 5. Trade execution remains manual outside both systems.
 
+## OpenClaw Command Integration
+
+TradingClaw also provides a strict local command adapter for OpenClaw-side tool use in:
+
+- `src/openclaw_futures/integrations/openclaw_adapter.py`
+
+Primary entrypoint:
+
+- `handle_command(command: str) -> str`
+
+Supported command forms:
+
+```text
+tc plan 1500
+tc ideas
+tc idea 42
+tc take 42 1
+tc skip 42
+tc result 42 win 86
+tc stats
+```
+
+Behavior:
+
+- Parsing is strict and deterministic.
+- No LLM or natural language parsing is used inside TradingClaw.
+- The adapter calls the existing local TradingClaw API dispatch layer and returns clean text output.
+
+Examples:
+
+```python
+from openclaw_futures.integrations.openclaw_adapter import handle_command
+
+print(handle_command("tc plan 1500"))
+print(handle_command("tc ideas"))
+print(handle_command("tc idea 42"))
+print(handle_command("tc take 42 1"))
+print(handle_command("tc skip 42"))
+print(handle_command("tc result 42 win 86"))
+print(handle_command("tc stats"))
+```
+
 ## Troubleshooting
 
 Missing runtime directory:
