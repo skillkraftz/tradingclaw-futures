@@ -149,6 +149,11 @@ def test_per_symbol_dedupe_and_manual_override(connection, fixture_dir, db_path)
         live_symbol_map={"M6E": "EUR/USD"},
         twelvedata_symbols=WATCHLIST,
         primary_symbol="EUR/USD",
+        openclaw_enabled=False,
+        openclaw_base_url="http://127.0.0.1:18789",
+        openclaw_reasoning_path="",
+        openclaw_auth_token="",
+        openclaw_auth_header="Authorization",
     )
     bars = _watchlist_bars(fixture_dir)
     scanner = ScannerService(config, connection, live_provider=FakeBatchProvider([_provider_payload("1min", bars)]))  # type: ignore[arg-type]

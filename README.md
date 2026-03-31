@@ -11,11 +11,12 @@ It is not a Discord bot, does not require a Discord token, does not modify `open
 - Deterministic 1:3 reward-to-risk setup generation
 - Stable invalidation and account sizing logic
 - File-backed market data provider
-- Twelve Data live sync loop for cached EUR/USD testing
+- Twelve Data live sync loop for a small Basic-plan watchlist
 - Local HTTP API using Python stdlib `wsgiref`
 - Optional CLI for local debugging and admin actions
 - Persistent SQLite trade journal
 - Persistent SQLite market-bar cache for live sync testing
+- Optional OpenClaw gateway client for reasoning handoff
 - Optional webhook posting with `thread_id` support
 
 ## Fresh Install
@@ -57,12 +58,35 @@ TRADINGCLAW_ALERT_START=08:30
 TRADINGCLAW_ALERT_END=11:30
 TRADINGCLAW_SCAN_INTERVAL_MINUTES=5
 TRADINGCLAW_ALLOW_OUTSIDE_WINDOW_MANUAL_SCAN=true
+TRADINGCLAW_OPENCLAW_ENABLED=false
+TRADINGCLAW_OPENCLAW_BASE_URL=http://127.0.0.1:18789
+TRADINGCLAW_OPENCLAW_REASONING_PATH=
+TRADINGCLAW_OPENCLAW_AUTH_TOKEN=
+TRADINGCLAW_OPENCLAW_AUTH_HEADER=Authorization
 ```
 
 If `TRADINGCLAW_WEBHOOK_URL` is unset, TradingClaw still works fully in local-only mode.
 If `TRADINGCLAW_TWELVEDATA_API_KEY` is unset, the original file-backed endpoints still work, but live sync fails clearly when invoked.
 
 ## Start The API
+
+Recommended startup:
+
+```bash
+./start_tradingclaw.sh
+```
+
+Useful options:
+
+```bash
+./start_tradingclaw.sh --skip-tests
+./start_tradingclaw.sh --provider file
+./start_tradingclaw.sh --provider twelvedata --port 8787
+```
+
+The startup script verifies `python3`, creates `.venv` if needed, installs the package in editable mode, checks `.env`, optionally runs tests, prints diagnostics, and starts the API server.
+
+Manual startup:
 
 ```bash
 source .venv/bin/activate
@@ -142,6 +166,16 @@ tradingclaw-futures sync run
 tradingclaw-futures sync status
 tradingclaw-futures scan run --persist-ideas
 tradingclaw-futures scan status
+```
+
+Use the local OpenClaw bridge helper:
+
+```bash
+python3 scripts/openclaw_bridge.py sync run
+python3 scripts/openclaw_bridge.py scan status
+python3 scripts/openclaw_bridge.py plan 1500
+python3 scripts/openclaw_bridge.py stats
+python3 scripts/openclaw_bridge.py --reason scan run
 ```
 
 ## HTTP API
@@ -356,9 +390,47 @@ Implemented behavior:
 
 1. OpenClaw receives a Discord request.
 2. OpenClaw calls TradingClaw over `localhost`.
-3. TradingClaw returns deterministic setups, levels, risk, persistence state, or reasoning context.
-4. OpenClaw presents that output directly, or forwards the reasoning-context payload to Codex for explanation.
-5. Trade execution remains manual outside both systems.
+3. TradingClaw returns deterministic setups, levels, sync/scan status, persistence state, or reasoning context.
+4. TradingClaw may optionally package a structured reasoning payload and submit it to the local OpenClaw gateway.
+5. OpenClaw presents that output directly, or forwards the reasoning payload to Codex for explanation or summarization.
+6. Trade execution remains manual outside both systems.
+
+OpenClaw remains the Discord-facing gateway. TradingClaw remains a standalone local engine and API.
+
+### OpenClaw Gateway Config
+
+TradingClaw does not assume any fixed OpenClaw route beyond the local base URL default. The reasoning handoff is fully configurable:
+
+```bash
+TRADINGCLAW_OPENCLAW_ENABLED=false
+TRADINGCLAW_OPENCLAW_BASE_URL=http://127.0.0.1:18789
+TRADINGCLAW_OPENCLAW_REASONING_PATH=
+TRADINGCLAW_OPENCLAW_AUTH_TOKEN=
+TRADINGCLAW_OPENCLAW_AUTH_HEADER=Authorization
+```
+
+- Leave `TRADINGCLAW_OPENCLAW_ENABLED=false` to keep TradingClaw fully local-only.
+- Set `TRADINGCLAW_OPENCLAW_REASONING_PATH` only when you have a verified local OpenClaw reasoning endpoint.
+- TradingClaw does not make any Discord assumptions and does not require changes to `openclaw.json`.
+
+### Local Bridge Usage
+
+The bridge helper demonstrates the intended boundary:
+
+- `scripts/openclaw_bridge.py`
+
+Examples:
+
+```bash
+python3 scripts/openclaw_bridge.py sync run
+python3 scripts/openclaw_bridge.py scan run --persist-ideas
+python3 scripts/openclaw_bridge.py ideas
+python3 scripts/openclaw_bridge.py idea 42
+python3 scripts/openclaw_bridge.py result 42 win 86
+python3 scripts/openclaw_bridge.py --reason stats
+```
+
+The bridge always calls TradingClaw over HTTP. If OpenClaw integration is enabled and the reasoning path is configured, it can also forward a structured reasoning payload to the local OpenClaw gateway.
 
 ## OpenClaw Command Integration
 
@@ -441,6 +513,11 @@ Live sync and scan:
 - Run `POST /sync/run` before the first `POST /scan/run` so the SQLite cache has bars to analyze.
 - If Twelve Data returns empty or unsupported `1min` data, TradingClaw falls back to `5min` and records the active interval in `/sync/status`.
 - Sync and scan status are stored in SQLite `runtime_state`, so the latest summary survives process restarts.
+
+OpenClaw reasoning handoff:
+
+- If `TRADINGCLAW_OPENCLAW_ENABLED=true` but `TRADINGCLAW_OPENCLAW_REASONING_PATH` is blank, the bridge reports that reasoning is not configured and still prints the TradingClaw result.
+- If the local OpenClaw gateway returns an error, TradingClaw and the bridge surface that error clearly without affecting journal state or scan persistence.
 
 ## Notes
 

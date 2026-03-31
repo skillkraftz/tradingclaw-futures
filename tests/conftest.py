@@ -47,6 +47,11 @@ def config(fixture_dir: Path, db_path: Path) -> AppConfig:
         live_symbol_map={"M6E": "EUR/USD"},
         twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
         primary_symbol="EUR/USD",
+        openclaw_enabled=False,
+        openclaw_base_url="http://127.0.0.1:18789",
+        openclaw_reasoning_path="",
+        openclaw_auth_token="",
+        openclaw_auth_header="Authorization",
     )
 
 

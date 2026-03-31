@@ -66,6 +66,11 @@ def test_post_message_includes_thread_id_in_url(monkeypatch) -> None:
         live_symbol_map={"M6E": "EUR/USD"},
         twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
         primary_symbol="EUR/USD",
+        openclaw_enabled=False,
+        openclaw_base_url="http://127.0.0.1:18789",
+        openclaw_reasoning_path="",
+        openclaw_auth_token="",
+        openclaw_auth_header="Authorization",
     )
 
     result = post_message(config, "hello")
@@ -98,6 +103,11 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         live_symbol_map={"M6E": "EUR/USD"},
         twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
         primary_symbol="EUR/USD",
+        openclaw_enabled=False,
+        openclaw_base_url="http://127.0.0.1:18789",
+        openclaw_reasoning_path="",
+        openclaw_auth_token="",
+        openclaw_auth_header="Authorization",
     )
     assert post_message(disabled, "hello")["sent"] is False
 
@@ -128,6 +138,11 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         live_symbol_map={"M6E": "EUR/USD"},
         twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
         primary_symbol="EUR/USD",
+        openclaw_enabled=False,
+        openclaw_base_url="http://127.0.0.1:18789",
+        openclaw_reasoning_path="",
+        openclaw_auth_token="",
+        openclaw_auth_header="Authorization",
     )
     result = post_message(failing, "hello")
     assert result["sent"] is False
@@ -164,6 +179,11 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
         live_symbol_map=app.config.live_symbol_map,
         twelvedata_symbols=app.config.twelvedata_symbols,
         primary_symbol=app.config.primary_symbol,
+        openclaw_enabled=app.config.openclaw_enabled,
+        openclaw_base_url=app.config.openclaw_base_url,
+        openclaw_reasoning_path=app.config.openclaw_reasoning_path,
+        openclaw_auth_token=app.config.openclaw_auth_token,
+        openclaw_auth_header=app.config.openclaw_auth_header,
     )
     monkeypatch.setattr("openclaw_futures.api.routes.post_message", fake_post_message)
 
@@ -195,6 +215,11 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
         live_symbol_map=app.config.live_symbol_map,
         twelvedata_symbols=app.config.twelvedata_symbols,
         primary_symbol=app.config.primary_symbol,
+        openclaw_enabled=app.config.openclaw_enabled,
+        openclaw_base_url=app.config.openclaw_base_url,
+        openclaw_reasoning_path=app.config.openclaw_reasoning_path,
+        openclaw_auth_token=app.config.openclaw_auth_token,
+        openclaw_auth_header=app.config.openclaw_auth_header,
     )
     monkeypatch.setattr("openclaw_futures.api.routes.post_message", post_message)
     _, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})

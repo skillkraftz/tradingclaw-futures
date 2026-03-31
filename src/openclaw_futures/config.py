@@ -148,6 +148,11 @@ class AppConfig:
     live_symbol_map: dict[str, str]
     twelvedata_symbols: tuple[str, ...]
     primary_symbol: str
+    openclaw_enabled: bool
+    openclaw_base_url: str
+    openclaw_reasoning_path: str
+    openclaw_auth_token: str
+    openclaw_auth_header: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -159,7 +164,7 @@ class AppConfig:
         watchlist = (
             tuple(item.strip() for item in watchlist_text.split(",") if item.strip())
             if watchlist_text
-            else (live_symbol_map.get(live_symbol, live_symbol),)
+            else DEFAULT_TWELVEDATA_SYMBOLS
         )
         return cls(
             host=os.getenv("TRADINGCLAW_HOST", "127.0.0.1"),
@@ -186,6 +191,11 @@ class AppConfig:
             live_symbol_map=live_symbol_map,
             twelvedata_symbols=watchlist or DEFAULT_TWELVEDATA_SYMBOLS,
             primary_symbol=os.getenv("TRADINGCLAW_PRIMARY_SYMBOL", (watchlist or DEFAULT_TWELVEDATA_SYMBOLS)[0]),
+            openclaw_enabled=_env_bool(os.getenv("TRADINGCLAW_OPENCLAW_ENABLED", "false")),
+            openclaw_base_url=os.getenv("TRADINGCLAW_OPENCLAW_BASE_URL", "http://127.0.0.1:18789"),
+            openclaw_reasoning_path=os.getenv("TRADINGCLAW_OPENCLAW_REASONING_PATH", ""),
+            openclaw_auth_token=os.getenv("TRADINGCLAW_OPENCLAW_AUTH_TOKEN", ""),
+            openclaw_auth_header=os.getenv("TRADINGCLAW_OPENCLAW_AUTH_HEADER", "Authorization"),
         )
 
     def sync_start_time(self) -> time:
