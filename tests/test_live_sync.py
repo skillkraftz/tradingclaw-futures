@@ -9,7 +9,7 @@ import pytest
 from conftest import call_app
 
 from openclaw_futures.config import AppConfig
-from openclaw_futures.models import Bar
+from openclaw_futures.models import AccountPlan, Bar, ContractAllocation, SetupCandidate, TradePlan
 from openclaw_futures.providers.twelvedata_provider import (
     TwelveDataEmptyResponseError,
     TwelveDataMalformedResponseError,
@@ -123,6 +123,7 @@ def test_sync_status_and_scan_group_results(connection, config, fixture_dir) -> 
     assert scan["symbols"]["SPY"]["category"] == "equity/etf"
     assert scan["symbols"]["ETH/USD"]["plan"]["levels"]["ETH/USD"]["last_price"] == bars["ETH/USD"][-1].close
     assert scan_status["symbols"]["EUR/USD"]["last_scan_summary"]["bars_used"] > 0
+    assert scan_status["last_scan_result_summary"]["detected_ideas"] >= 0
 
 
 def test_per_symbol_dedupe_and_manual_override(connection, fixture_dir, db_path) -> None:
@@ -173,8 +174,90 @@ def test_per_symbol_dedupe_and_manual_override(connection, fixture_dir, db_path)
 
     assert blocked["persisted"] is False
     assert blocked["webhook"]["sent"] is False
+    assert blocked["webhook"]["reason_code"] == "alert_suppressed_policy"
     assert allowed["manual_override_used"] is True
     assert deduped["idea_ids"] == []
+
+
+def test_scan_records_failed_alert_state_and_counts(connection, config, fixture_dir) -> None:
+    bars = _watchlist_bars(fixture_dir)
+    scanner = ScannerService(config, connection, live_provider=FakeBatchProvider([_provider_payload("1min", bars)]))  # type: ignore[arg-type]
+    scanner.run_sync(now=datetime(2026, 3, 31, 8, 40))
+
+    from openclaw_futures.services import scanner as scanner_module
+
+    original = scanner_module.post_message
+    original_build_trade_plan = scanner_module.build_trade_plan
+
+    def fake_build_trade_plan(_provider, account_size, symbols=None, source_room="desk"):
+        symbol = (symbols or ["EUR/USD"])[0]
+        setup = SetupCandidate(
+            symbol=symbol,
+            bias="long",
+            entry_min=1.08,
+            entry_max=1.081,
+            stop=1.079,
+            target=1.084,
+            risk_per_contract=10.0,
+            reward_per_contract=30.0,
+            rr=3.0,
+            confidence=0.8,
+            setup_type="pullback",
+            notes=["test setup"],
+            valid=True,
+            score=10,
+        )
+        return TradePlan(
+            account_plan=AccountPlan(
+                account_size=account_size,
+                risk_percent=1.0,
+                risk_budget=100.0,
+                daily_loss_cap=200.0,
+                max_open_risk=100.0,
+                allocations=[
+                    ContractAllocation(
+                        label="base",
+                        total_contracts=1,
+                        mcl_contracts=0,
+                        m6e_contracts=1,
+                        estimated_risk=10.0,
+                        estimated_reward=30.0,
+                    )
+                ],
+                notes=[],
+            ),
+            setups=[setup],
+            rejected_setups=[],
+            do_not_trade_conditions=[],
+            level_summary={symbol: scanner_module._snapshot_from_bars(symbol, bars[symbol])},
+            source_room=source_room,
+        )
+
+    scanner_module.post_message = lambda _config, _content: {
+        "enabled": True,
+        "attempted": True,
+        "sent": False,
+        "reason_code": "http_error",
+        "reason": "HTTP 500: upstream failure",
+    }
+    scanner_module.build_trade_plan = fake_build_trade_plan
+    try:
+        payload = scanner.run_scan(
+            account_size=10_000,
+            persist_ideas=True,
+            post_webhook_flag=True,
+            now=datetime(2026, 3, 31, 9, 0),
+        )
+    finally:
+        scanner_module.post_message = original
+        scanner_module.build_trade_plan = original_build_trade_plan
+
+    assert payload["persisted_ideas"] > 0
+    assert payload["alerted_ideas"] == 0
+    assert payload["alert_failures"] == payload["persisted_ideas"]
+    assert payload["webhook"]["reason_code"] == "http_error"
+    assert "HTTP 500" in payload["last_scan_result_summary"]["alert_reason"]
+    assert any(idea["alert_error"] for idea in payload["ideas"])
 
 
 def test_api_sync_and_scan_status_for_watchlist(app, fixture_dir, monkeypatch) -> None:

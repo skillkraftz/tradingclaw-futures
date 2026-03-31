@@ -22,7 +22,12 @@ CREATE TABLE IF NOT EXISTS trade_ideas (
     rr REAL NOT NULL,
     confidence REAL NOT NULL,
     notes_json TEXT NOT NULL,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    alert_sent INTEGER NOT NULL DEFAULT 0,
+    alert_attempted_at TEXT,
+    alerted_at TEXT,
+    alert_error TEXT,
+    alert_channel TEXT
 );
 
 CREATE TABLE IF NOT EXISTS trade_actions (
@@ -69,4 +74,32 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 def initialize(connection: sqlite3.Connection) -> None:
     connection.executescript(SCHEMA)
+    _migrate_trade_ideas_schema(connection)
     connection.commit()
+
+
+def _migrate_trade_ideas_schema(connection: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(trade_ideas)").fetchall()
+    }
+    required_columns = {
+        "alert_sent": "ALTER TABLE trade_ideas ADD COLUMN alert_sent INTEGER NOT NULL DEFAULT 0",
+        "alert_attempted_at": "ALTER TABLE trade_ideas ADD COLUMN alert_attempted_at TEXT",
+        "alerted_at": "ALTER TABLE trade_ideas ADD COLUMN alerted_at TEXT",
+        "alert_error": "ALTER TABLE trade_ideas ADD COLUMN alert_error TEXT",
+        "alert_channel": "ALTER TABLE trade_ideas ADD COLUMN alert_channel TEXT",
+    }
+    for name, statement in required_columns.items():
+        if name not in columns:
+            connection.execute(statement)
+
+    connection.execute(
+        """
+        UPDATE trade_ideas
+        SET status = 'detected',
+            alert_sent = COALESCE(alert_sent, 0),
+            alert_channel = COALESCE(alert_channel, source_room)
+        WHERE status = 'proposed'
+        """
+    )

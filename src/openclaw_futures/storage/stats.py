@@ -4,7 +4,9 @@ from __future__ import annotations
 import sqlite3
 
 from openclaw_futures.models import (
+    IDEA_STATUS_ALERTED,
     IDEA_STATUS_BREAKEVEN,
+    IDEA_STATUS_DETECTED,
     IDEA_STATUS_INVALIDATED,
     IDEA_STATUS_LOSS,
     IDEA_STATUS_PROPOSED,
@@ -23,7 +25,8 @@ def calculate_stats(connection: sqlite3.Connection) -> StatsSummary:
     ).fetchone()
     return StatsSummary(
         total_ideas=sum(counts.values()),
-        proposed=counts.get(IDEA_STATUS_PROPOSED, 0),
+        detected=counts.get(IDEA_STATUS_DETECTED, 0) + counts.get(IDEA_STATUS_PROPOSED, 0),
+        alerted=counts.get(IDEA_STATUS_ALERTED, 0),
         taken=counts.get(IDEA_STATUS_TAKEN, 0),
         skipped=counts.get(IDEA_STATUS_SKIPPED, 0),
         invalidated=counts.get(IDEA_STATUS_INVALIDATED, 0),

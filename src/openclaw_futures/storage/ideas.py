@@ -6,7 +6,9 @@ import sqlite3
 from datetime import UTC, datetime
 
 from openclaw_futures.models import (
+    IDEA_STATUS_ALERTED,
     IDEA_STATUS_BREAKEVEN,
+    IDEA_STATUS_DETECTED,
     IDEA_STATUS_INVALIDATED,
     IDEA_STATUS_LOSS,
     IDEA_STATUS_PROPOSED,
@@ -39,8 +41,9 @@ def create_trade_idea(
         """
         INSERT INTO trade_ideas (
             created_at, source_room, symbol, setup_type, bias, entry_min, entry_max, stop, target,
-            risk_per_contract, reward_per_contract, rr, confidence, notes_json, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            risk_per_contract, reward_per_contract, rr, confidence, notes_json, status,
+            alert_sent, alert_channel
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             _now(),
@@ -57,7 +60,9 @@ def create_trade_idea(
             setup.rr,
             setup.confidence,
             notes_json,
-            IDEA_STATUS_PROPOSED,
+            IDEA_STATUS_DETECTED,
+            0,
+            source_room,
         ),
     )
     connection.commit()
@@ -101,7 +106,7 @@ def mark_taken(
     return _transition(
         connection,
         idea_id,
-        from_status=IDEA_STATUS_PROPOSED,
+        from_statuses=(IDEA_STATUS_DETECTED, IDEA_STATUS_ALERTED, IDEA_STATUS_PROPOSED),
         to_status=IDEA_STATUS_TAKEN,
         contracts=contracts,
         entry_fill=entry_fill,
@@ -110,11 +115,23 @@ def mark_taken(
 
 
 def mark_skipped(connection: sqlite3.Connection, idea_id: int, *, notes: str | None = None) -> TradeIdea:
-    return _transition(connection, idea_id, from_status=IDEA_STATUS_PROPOSED, to_status=IDEA_STATUS_SKIPPED, notes=notes)
+    return _transition(
+        connection,
+        idea_id,
+        from_statuses=(IDEA_STATUS_DETECTED, IDEA_STATUS_ALERTED, IDEA_STATUS_PROPOSED),
+        to_status=IDEA_STATUS_SKIPPED,
+        notes=notes,
+    )
 
 
 def mark_invalidated(connection: sqlite3.Connection, idea_id: int, *, notes: str | None = None) -> TradeIdea:
-    return _transition(connection, idea_id, from_status=IDEA_STATUS_PROPOSED, to_status=IDEA_STATUS_INVALIDATED, notes=notes)
+    return _transition(
+        connection,
+        idea_id,
+        from_statuses=(IDEA_STATUS_DETECTED, IDEA_STATUS_ALERTED, IDEA_STATUS_PROPOSED),
+        to_status=IDEA_STATUS_INVALIDATED,
+        notes=notes,
+    )
 
 
 def record_result(
@@ -131,7 +148,7 @@ def record_result(
     return _transition(
         connection,
         idea_id,
-        from_status=IDEA_STATUS_TAKEN,
+        from_statuses=(IDEA_STATUS_TAKEN,),
         to_status=result,
         exit_fill=exit_fill,
         pnl_dollars=pnl_dollars,
@@ -147,11 +164,50 @@ def list_actions(connection: sqlite3.Connection, idea_id: int) -> list[TradeActi
     return [_row_to_action(row) for row in rows]
 
 
+def record_alert_state(
+    connection: sqlite3.Connection,
+    idea_ids: list[int],
+    *,
+    result: dict[str, object],
+    alert_channel: str | None = None,
+    attempted_at: str | None = None,
+) -> list[TradeIdea]:
+    if not idea_ids:
+        return []
+
+    timestamp = attempted_at or _now()
+    sent = bool(result.get("sent"))
+    detail = _alert_detail(result)
+    status = IDEA_STATUS_ALERTED if sent else IDEA_STATUS_DETECTED
+    alerted_at = timestamp if sent else None
+    alert_error = None if sent else detail
+    channel = alert_channel
+
+    connection.executemany(
+        """
+        UPDATE trade_ideas
+        SET status = ?,
+            alert_sent = ?,
+            alert_attempted_at = ?,
+            alerted_at = ?,
+            alert_error = ?,
+            alert_channel = COALESCE(?, alert_channel, source_room)
+        WHERE idea_id = ?
+        """,
+        [
+            (status, int(sent), timestamp, alerted_at, alert_error, channel, idea_id)
+            for idea_id in idea_ids
+        ],
+    )
+    connection.commit()
+    return [get_trade_idea(connection, idea_id) for idea_id in idea_ids]
+
+
 def _transition(
     connection: sqlite3.Connection,
     idea_id: int,
     *,
-    from_status: str,
+    from_statuses: tuple[str, ...],
     to_status: str,
     contracts: int | None = None,
     entry_fill: float | None = None,
@@ -160,8 +216,9 @@ def _transition(
     notes: str | None = None,
 ) -> TradeIdea:
     current = get_trade_idea(connection, idea_id)
-    if current.status != from_status:
-        raise ValueError(f"idea_id={idea_id} must be {from_status!r} before transition to {to_status!r}")
+    if current.status not in from_statuses:
+        allowed = ", ".join(repr(item) for item in from_statuses)
+        raise ValueError(f"idea_id={idea_id} must be one of ({allowed}) before transition to {to_status!r}")
     connection.execute("UPDATE trade_ideas SET status = ? WHERE idea_id = ?", (to_status, idea_id))
     connection.execute(
         """
@@ -193,6 +250,11 @@ def _row_to_idea(row: sqlite3.Row) -> TradeIdea:
         confidence=row["confidence"],
         notes_json=json.loads(row["notes_json"]),
         status=row["status"],
+        alert_sent=bool(row["alert_sent"]),
+        alert_attempted_at=row["alert_attempted_at"],
+        alerted_at=row["alerted_at"],
+        alert_error=row["alert_error"],
+        alert_channel=row["alert_channel"],
     )
 
 
@@ -228,7 +290,7 @@ def _find_duplicate_idea(connection: sqlite3.Connection, *, source_room: str, se
           AND entry_max = ?
           AND stop = ?
           AND target = ?
-          AND status = ?
+          AND status IN (?, ?, ?)
         ORDER BY idea_id DESC
         LIMIT 1
         """,
@@ -242,9 +304,23 @@ def _find_duplicate_idea(connection: sqlite3.Connection, *, source_room: str, se
             setup.entry_max,
             setup.stop,
             setup.target,
+            IDEA_STATUS_DETECTED,
+            IDEA_STATUS_ALERTED,
             IDEA_STATUS_PROPOSED,
         ),
     ).fetchone()
     if row is None:
         return None
     return _row_to_idea(row)
+
+
+def _alert_detail(result: dict[str, object]) -> str:
+    reason = str(result.get("reason") or "").strip()
+    code = str(result.get("reason_code") or "").strip()
+    if code and reason:
+        return f"{code}: {reason}"
+    if reason:
+        return reason
+    if code:
+        return code
+    return "alert attempt failed"

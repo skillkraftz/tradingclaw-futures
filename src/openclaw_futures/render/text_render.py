@@ -35,9 +35,10 @@ def render_help() -> str:
             "GET /scan/status",
             "",
             "Statuses:",
-            "proposed -> taken",
-            "proposed -> skipped",
-            "proposed -> invalidated",
+            "detected -> alerted",
+            "detected/alerted -> taken",
+            "detected/alerted -> skipped",
+            "detected/alerted -> invalidated",
             "taken -> win/loss/breakeven",
             "",
             "CLI commands:",
@@ -141,7 +142,7 @@ def render_idea_detail(idea: TradeIdea, actions: list[TradeAction]) -> str:
 
 
 def render_transition_summary(idea: TradeIdea, action: TradeAction | None = None) -> str:
-    line = f"idea_id={idea.idea_id} | {idea.symbol} {idea.bias} | status {idea.status}"
+    line = f"idea_id={idea.idea_id} | {idea.symbol} {idea.bias} | { _idea_status_label(idea) }"
     if action is None:
         return line
     suffix = [f"action {action.action_type}"]
@@ -161,7 +162,8 @@ def render_stats(stats: StatsSummary) -> str:
         [
             "TradingClaw Stats",
             f"Total ideas: {stats.total_ideas}",
-            f"Proposed: {stats.proposed}",
+            f"Detected: {stats.detected}",
+            f"Alerted: {stats.alerted}",
             f"Taken: {stats.taken}",
             f"Skipped: {stats.skipped}",
             f"Invalidated: {stats.invalidated}",
@@ -207,15 +209,23 @@ def render_scan_status(status: dict[str, object]) -> str:
         f"Alert window: {window['start']}-{window['end']} | active {status.get('active')}",
         f"Last scan time: {status.get('last_scan_time') or 'never'}",
     ]
+    if summary:
+        lines.append(
+            "Last scan summary: "
+            f"detected {summary.get('detected_ideas', 0)} | "
+            f"persisted {summary.get('persisted_ideas', 0)} | "
+            f"alerted {summary.get('alerted_ideas', 0)} | "
+            f"alert failures {summary.get('alert_failures', 0)}"
+        )
+        if summary.get("alert_reason"):
+            lines.append(f"Alert detail: {summary.get('alert_reason')}")
     for symbol, details in status.get("symbols", {}).items():
         last_scan = details.get("last_scan_summary") or {}
         lines.append(
             f"{symbol} [{details.get('category', '?')}] | interval {details.get('interval') or '?'} | latest {details.get('latest_cached_timestamp') or 'none'} | bars {last_scan.get('bars_used', 0)}"
-            f" | valid setups {last_scan.get('valid_setups', 0)} | new ideas {len(last_scan.get('new_idea_ids', []))}"
+            f" | valid setups {last_scan.get('valid_setups', 0)} | persisted {last_scan.get('persisted_ideas', 0)} | alerted {last_scan.get('alerted_ideas', 0)}"
             f"{' | error ' + str(last_scan.get('error')) if last_scan.get('error') else ''}"
         )
-    if summary and summary.get("webhook_sent") is not None:
-        lines.append(f"Webhook sent: {summary.get('webhook_sent')}")
     return "\n".join(lines)
 
 
@@ -263,7 +273,7 @@ def _idea_line(idea: TradeIdea) -> str:
         f" | stop {idea.stop}"
         f" | target {idea.target}"
         f" | RR {idea.rr:.2f}"
-        f" | status {idea.status}"
+        f" | {_idea_status_label(idea)}"
     )
 
 
@@ -280,3 +290,13 @@ def _action_line(action: TradeAction) -> str:
     if action.notes:
         parts.append(action.notes)
     return " | ".join(parts)
+
+
+def _idea_status_label(idea: TradeIdea) -> str:
+    if idea.status == "alerted":
+        return "status alerted"
+    if idea.alert_sent:
+        return f"status {idea.status} | alerted"
+    if idea.alert_attempted_at and idea.alert_error:
+        return f"status {idea.status} | alert failed: {idea.alert_error}"
+    return f"status {idea.status} | not alerted"

@@ -126,6 +126,11 @@ class TradeIdea:
     confidence: float
     notes_json: dict[str, object]
     status: str
+    alert_sent: bool
+    alert_attempted_at: str | None = None
+    alerted_at: str | None = None
+    alert_error: str | None = None
+    alert_channel: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +149,8 @@ class TradeAction:
 @dataclass(frozen=True, slots=True)
 class StatsSummary:
     total_ideas: int
-    proposed: int
+    detected: int
+    alerted: int
     taken: int
     skipped: int
     invalidated: int
@@ -155,6 +161,8 @@ class StatsSummary:
     average_pnl: float
 
 
+IDEA_STATUS_DETECTED = "detected"
+IDEA_STATUS_ALERTED = "alerted"
 IDEA_STATUS_PROPOSED = "proposed"
 IDEA_STATUS_TAKEN = "taken"
 IDEA_STATUS_SKIPPED = "skipped"

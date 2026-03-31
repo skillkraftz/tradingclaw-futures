@@ -39,6 +39,8 @@ def test_plan_and_idea_lifecycle(app) -> None:
     status, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})
     assert status == 200
     assert payload["idea_ids"]
+    assert payload["ideas"][0]["status"] == "detected"
+    assert payload["ideas"][0]["alert_sent"] is False
 
     idea_id = payload["idea_ids"][0]
     take_status, take_payload = call_app(app, "POST", f"/ideas/{idea_id}/take", {"contracts": 1, "entry_fill": 72.18})
@@ -105,10 +107,19 @@ def test_get_ideas_query_string_and_single_idea_endpoint(app) -> None:
     assert detail_status == 200
     assert detail_payload["idea"]["idea_id"] == first
     assert detail_payload["actions"]
+    assert "not alerted" in detail_payload["text"] or "alert failed" in detail_payload["text"] or "status alerted" in detail_payload["text"]
     assert missing_status == 404
     assert "unknown idea_id" in missing_payload["error"]
     assert invalid_status == 404
     assert "unknown route" in invalid_payload["error"]
+
+
+def test_ideas_output_shows_alert_state(app) -> None:
+    _, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})
+    ideas_status, ideas_payload = call_app(app, "GET", "/ideas")
+    assert ideas_status == 200
+    assert ideas_payload["ideas"][0]["status"] == "detected"
+    assert "not alerted" in ideas_payload["text"]
 
 
 def test_reasoning_context_response_shape(app) -> None:
@@ -128,6 +139,19 @@ def test_operation_without_webhook_configured(app) -> None:
     status, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "post_webhook": True})
     assert status == 200
     assert payload["webhook"]["sent"] is False
+    assert payload["webhook"]["reason_code"] == "webhook_disabled"
+
+
+def test_plan_records_alert_state_when_webhook_succeeds(app, monkeypatch) -> None:
+    def fake_post_message(_config, _content):
+        return {"enabled": True, "attempted": True, "sent": True, "status": 204}
+
+    monkeypatch.setattr("openclaw_futures.api.routes.post_message", fake_post_message)
+    status, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True, "post_webhook": True})
+    assert status == 200
+    assert payload["webhook"]["sent"] is True
+    assert all(idea["status"] == "alerted" for idea in payload["ideas"])
+    assert all(idea["alert_sent"] is True for idea in payload["ideas"])
 
 
 def test_unknown_route_returns_404(app) -> None:

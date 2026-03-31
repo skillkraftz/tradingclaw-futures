@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from openclaw_futures.analysis.live_levels import build_live_snapshot
 from openclaw_futures.config import AppConfig, live_symbol_profile
 from openclaw_futures.integrations.openclaw_contracts import build_trade_plan, idea_contract, plan_contract
-from openclaw_futures.integrations.webhook import post_message
+from openclaw_futures.integrations.webhook import post_message, suppressed_result
 from openclaw_futures.models import MarketBar, MarketSnapshot
 from openclaw_futures.providers.base import MarketDataProvider
 from openclaw_futures.providers.twelvedata_provider import TwelveDataProvider
@@ -18,7 +18,7 @@ from openclaw_futures.render.text_render import (
     render_window_state,
 )
 from openclaw_futures.render.webhook_render import render_webhook_scan
-from openclaw_futures.storage.ideas import create_trade_idea, list_trade_ideas
+from openclaw_futures.storage.ideas import create_trade_idea, get_trade_idea, list_trade_ideas, record_alert_state
 from openclaw_futures.storage.market_bars import (
     fetch_recent_market_bars,
     get_latest_cached_timestamp,
@@ -240,6 +240,7 @@ class ScannerService:
         existing_ids = {idea.idea_id for idea in list_trade_ideas(self.connection, limit=1000)}
         symbol_payloads: dict[str, dict[str, object]] = {}
         all_new_ideas = []
+        detected_count = 0
         any_cached = False
         for symbol in self.config.twelvedata_symbols:
             interval = self._preferred_cached_interval(symbol)
@@ -251,7 +252,9 @@ class ScannerService:
                     "bars_used": 0,
                     "valid_setups": 0,
                     "rejected_setups": 0,
+                    "persisted_ideas": 0,
                     "new_idea_ids": [],
+                    "alerted_idea_ids": [],
                     "error": "no cached live bars are available yet; run /sync/run first",
                 }
                 continue
@@ -264,16 +267,19 @@ class ScannerService:
                     "bars_used": 0,
                     "valid_setups": 0,
                     "rejected_setups": 0,
+                    "persisted_ideas": 0,
                     "new_idea_ids": [],
+                    "alerted_idea_ids": [],
                     "error": "no cached live bars are available yet; run /sync/run first",
                 }
                 continue
             any_cached = True
             provider = _SingleSnapshotProvider(_snapshot_from_bars(symbol, bars))
             plan = build_trade_plan(provider, account_size, symbols=[symbol], source_room=source_room or self.config.room_label)
+            detected_count += len(plan.setups)
             persisted_ideas = (
                 [create_trade_idea(self.connection, source_room=plan.source_room, setup=setup) for setup in plan.setups]
-                if persist_ideas and may_alert
+                if persist_ideas
                 else []
             )
             new_ideas = [idea for idea in persisted_ideas if idea.idea_id not in existing_ids]
@@ -286,7 +292,9 @@ class ScannerService:
                 "bars_used": len(bars),
                 "valid_setups": len(plan.setups),
                 "rejected_setups": len(plan.rejected_setups),
+                "persisted_ideas": len(new_ideas),
                 "new_idea_ids": [idea.idea_id for idea in new_ideas],
+                "alerted_idea_ids": [],
                 "plan": plan_contract(plan),
             }
 
@@ -298,36 +306,78 @@ class ScannerService:
             if may_alert and all_new_ideas:
                 webhook_payload = post_message(self.config, render_webhook_scan(all_new_ideas))
             elif may_alert:
-                webhook_payload = {"enabled": bool(self.config.webhook_url), "sent": False, "reason": "no new alerts"}
+                webhook_payload = suppressed_result(
+                    config=self.config,
+                    reason_code="no_new_alerts",
+                    reason="alert suppressed by policy: no new ideas qualified for notification",
+                )
             else:
-                webhook_payload = {
-                    "enabled": bool(self.config.webhook_url),
-                    "sent": False,
-                    "reason": "outside alert window",
-                }
+                webhook_payload = suppressed_result(
+                    config=self.config,
+                    reason_code="alert_suppressed_policy",
+                    reason="alert suppressed by policy: outside alert window",
+                )
+            if all_new_ideas and webhook_payload is not None:
+                updated = record_alert_state(
+                    self.connection,
+                    [idea.idea_id for idea in all_new_ideas],
+                    result=webhook_payload,
+                    alert_channel=source_room or self.config.room_label,
+                    attempted_at=current_time.isoformat(),
+                )
+                updated_map = {idea.idea_id: idea for idea in updated}
+                for symbol, details in symbol_payloads.items():
+                    details["alerted_idea_ids"] = [
+                        idea_id
+                        for idea_id in details["new_idea_ids"]
+                        if updated_map.get(idea_id) is not None and updated_map[idea_id].alert_sent
+                    ]
+
+        persisted_count = len(all_new_ideas)
+        refreshed_ideas = []
+        alerted_count = 0
+        if all_new_ideas:
+            refreshed_ideas = [get_trade_idea(self.connection, idea.idea_id) for idea in all_new_ideas]
+            refreshed_map = {idea.idea_id: idea for idea in refreshed_ideas}
+            alerted_count = sum(
+                1
+                for idea in all_new_ideas
+                if refreshed_map.get(idea.idea_id) is not None and refreshed_map[idea.idea_id].alert_sent
+            )
+        alert_failures = persisted_count - alerted_count if webhook_payload and not webhook_payload.get("sent") else 0
 
         summary = {
             "watchlist": list(self.config.twelvedata_symbols),
             "alert_window_active": alert_window_active,
             "manual_override_used": bool(not alert_window_active and manual_override),
+            "detected_ideas": detected_count,
+            "persisted_ideas": persisted_count,
+            "alerted_ideas": alerted_count,
+            "alert_failures": alert_failures,
+            "alert_reason": webhook_payload.get("reason") if webhook_payload else None,
             "symbols": {
                 symbol: {
                     "bars_used": details["bars_used"],
                     "valid_setups": details["valid_setups"],
+                    "persisted_ideas": details["persisted_ideas"],
+                    "alerted_ideas": len(details["alerted_idea_ids"]),
                     "new_idea_ids": details["new_idea_ids"],
                     **({"error": details["error"]} if "error" in details else {}),
                 }
                 for symbol, details in symbol_payloads.items()
             },
-            "webhook_sent": bool(webhook_payload and webhook_payload.get("sent")),
         }
         payload = {
             "watchlist": list(self.config.twelvedata_symbols),
             "primary_symbol": self.config.primary_symbol,
             "symbols": symbol_payloads,
-            "persisted": bool(persist_ideas and may_alert and all_new_ideas),
+            "detected": detected_count,
+            "persisted": bool(all_new_ideas),
+            "persisted_ideas": persisted_count,
+            "alerted_ideas": alerted_count,
+            "alert_failures": alert_failures,
             "idea_ids": [idea.idea_id for idea in all_new_ideas],
-            "ideas": [idea_contract(idea) for idea in all_new_ideas],
+            "ideas": [idea_contract(item) for item in refreshed_ideas],
             "alert_window": self._window_payload(self.config.alert_start, self.config.alert_end, current_time),
             "alert_window_active": alert_window_active,
             "manual_override_used": bool(not alert_window_active and manual_override),
@@ -340,8 +390,6 @@ class ScannerService:
                 webhook_requested=post_webhook_flag,
             ),
         }
-        if webhook_payload is not None:
-            payload["webhook"] = webhook_payload
         set_state(
             self.connection,
             _scan_key(None),
@@ -359,6 +407,8 @@ class ScannerService:
                             "bars_used": details["bars_used"],
                             "valid_setups": details["valid_setups"],
                             "rejected_setups": details["rejected_setups"],
+                            "persisted_ideas": details["persisted_ideas"],
+                            "alerted_ideas": len(details["alerted_idea_ids"]),
                             "new_idea_ids": details["new_idea_ids"],
                             **({"error": details["error"]} if "error" in details else {}),
                         },
@@ -367,6 +417,8 @@ class ScannerService:
                 },
             },
         )
+        if webhook_payload is not None:
+            payload["webhook"] = webhook_payload
         payload["text"] = "\n\n".join([payload["text"], render_scan_status(self.get_scan_status(now=current_time))])
         return payload
 

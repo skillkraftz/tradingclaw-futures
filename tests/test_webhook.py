@@ -109,7 +109,9 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         openclaw_auth_token="",
         openclaw_auth_header="Authorization",
     )
-    assert post_message(disabled, "hello")["sent"] is False
+    disabled_result = post_message(disabled, "hello")
+    assert disabled_result["sent"] is False
+    assert disabled_result["reason_code"] == "webhook_disabled"
 
     def fake_urlopen(_http_request, timeout=None):
         raise OSError("boom")
@@ -146,6 +148,7 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
     )
     result = post_message(failing, "hello")
     assert result["sent"] is False
+    assert result["reason_code"] == "transport_error"
     assert "thread_id=thread-1" in result["url"]
 
 
@@ -232,6 +235,53 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
     assert "webhook" in take_payload
     assert "webhook" in skip_payload
     assert disabled_payload["webhook"]["sent"] is False
+    assert disabled_payload["webhook"]["reason_code"] == "webhook_disabled"
     assert len(captured) == 2
     assert "status taken" in captured[0][1]
     assert "status skipped" in captured[1][1]
+
+
+def test_webhook_http_error_returns_structured_diagnostics(monkeypatch, fixture_dir, tmp_path) -> None:
+    def fake_urlopen(_http_request, timeout=None):
+        raise __import__("urllib.error").error.HTTPError(
+            url="https://example.com/webhook?thread_id=bad",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=__import__("io").BytesIO(b"invalid thread_id"),
+        )
+
+    monkeypatch.setattr("openclaw_futures.integrations.webhook.request.urlopen", fake_urlopen)
+    config = AppConfig(
+        host="127.0.0.1",
+        port=8787,
+        data_dir=fixture_dir,
+        default_provider="file",
+        db_path=tmp_path / "db.sqlite3",
+        webhook_url="https://example.com/webhook",
+        webhook_thread_id="bad",
+        room_label="desk",
+        log_level="INFO",
+        twelvedata_api_key="test-key",
+        twelvedata_base_url="https://api.twelvedata.com",
+        backfill_days=10,
+        sync_start="08:00",
+        sync_end="13:00",
+        alert_start="08:30",
+        alert_end="11:30",
+        scan_interval_minutes=5,
+        allow_outside_window_manual_scan=True,
+        live_symbol="M6E",
+        live_symbol_map={"M6E": "EUR/USD"},
+        twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
+        primary_symbol="EUR/USD",
+        openclaw_enabled=False,
+        openclaw_base_url="http://127.0.0.1:18789",
+        openclaw_reasoning_path="",
+        openclaw_auth_token="",
+        openclaw_auth_header="Authorization",
+    )
+    result = post_message(config, "hello")
+    assert result["sent"] is False
+    assert result["attempted"] is True
+    assert result["reason_code"] == "invalid_thread_id"

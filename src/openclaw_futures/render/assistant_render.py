@@ -19,6 +19,16 @@ def render_assistant_setups(setups: list[SetupCandidate], rejected_setups: list[
 
 def render_assistant_ideas(ideas: list[TradeIdea]) -> str:
     return "\n".join(
-        f"idea_id {idea.idea_id} | {idea.symbol} | {idea.bias} | RR {idea.rr:.2f} | status {idea.status}"
+        f"idea_id {idea.idea_id} | {idea.symbol} | {idea.bias} | RR {idea.rr:.2f} | {_assistant_idea_state(idea)}"
         for idea in ideas
     )
+
+
+def _assistant_idea_state(idea: TradeIdea) -> str:
+    if idea.status == "alerted":
+        return "status alerted"
+    if idea.alert_sent:
+        return f"status {idea.status} | alerted"
+    if idea.alert_attempted_at and idea.alert_error:
+        return f"status {idea.status} | alert failed: {idea.alert_error}"
+    return f"status {idea.status} | not alerted"

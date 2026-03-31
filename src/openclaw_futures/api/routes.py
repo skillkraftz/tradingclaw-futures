@@ -35,6 +35,7 @@ from openclaw_futures.storage.ideas import (
     mark_invalidated,
     mark_skipped,
     mark_taken,
+    record_alert_state,
 )
 from openclaw_futures.storage.results import record_trade_result
 from openclaw_futures.storage.stats import calculate_stats
@@ -87,6 +88,16 @@ def plan_handler(app, body: dict[str, object]) -> dict[str, object]:
     symbols = normalize_symbols(_as_symbols(body.get("symbols")))
     plan = build_trade_plan(app.provider, account_size, symbols, source_room=source_room)
     ideas = [create_trade_idea(app.connection, source_room=source_room, setup=setup) for setup in plan.setups] if persist_ideas else []
+    webhook_payload = None
+    if post_webhook:
+        webhook_payload = post_message(app.config, render_webhook_plan(plan))
+        if ideas:
+            ideas = record_alert_state(
+                app.connection,
+                [idea.idea_id for idea in ideas],
+                result=webhook_payload,
+                alert_channel=source_room,
+            )
     payload: dict[str, object] = {
         "plan": plan_contract(plan),
         "persisted": persist_ideas,
@@ -95,8 +106,8 @@ def plan_handler(app, body: dict[str, object]) -> dict[str, object]:
         "text": render_plan(plan, ideas),
         "assistant_text": render_assistant_setups(plan.setups, plan.rejected_setups),
     }
-    if post_webhook:
-        payload["webhook"] = post_message(app.config, render_webhook_plan(plan))
+    if webhook_payload is not None:
+        payload["webhook"] = webhook_payload
     return payload
 
 

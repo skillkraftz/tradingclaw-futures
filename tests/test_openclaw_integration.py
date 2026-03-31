@@ -95,7 +95,8 @@ def test_reasoning_payload_generation() -> None:
         },
         stats=StatsSummary(
             total_ideas=3,
-            proposed=1,
+            detected=1,
+            alerted=1,
             taken=1,
             skipped=0,
             invalidated=0,
