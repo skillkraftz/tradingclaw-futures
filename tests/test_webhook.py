@@ -64,6 +64,8 @@ def test_post_message_includes_thread_id_in_url(monkeypatch) -> None:
         allow_outside_window_manual_scan=True,
         live_symbol="M6E",
         live_symbol_map={"M6E": "EUR/USD"},
+        twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
+        primary_symbol="EUR/USD",
     )
 
     result = post_message(config, "hello")
@@ -94,6 +96,8 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         allow_outside_window_manual_scan=True,
         live_symbol="M6E",
         live_symbol_map={"M6E": "EUR/USD"},
+        twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
+        primary_symbol="EUR/USD",
     )
     assert post_message(disabled, "hello")["sent"] is False
 
@@ -122,6 +126,8 @@ def test_post_message_handles_disabled_and_transport_errors(monkeypatch, fixture
         allow_outside_window_manual_scan=True,
         live_symbol="M6E",
         live_symbol_map={"M6E": "EUR/USD"},
+        twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
+        primary_symbol="EUR/USD",
     )
     result = post_message(failing, "hello")
     assert result["sent"] is False
@@ -156,6 +162,8 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
         allow_outside_window_manual_scan=app.config.allow_outside_window_manual_scan,
         live_symbol=app.config.live_symbol,
         live_symbol_map=app.config.live_symbol_map,
+        twelvedata_symbols=app.config.twelvedata_symbols,
+        primary_symbol=app.config.primary_symbol,
     )
     monkeypatch.setattr("openclaw_futures.api.routes.post_message", fake_post_message)
 
@@ -185,6 +193,8 @@ def test_lifecycle_webhook_posting_and_disabled_mode(app, monkeypatch) -> None:
         allow_outside_window_manual_scan=app.config.allow_outside_window_manual_scan,
         live_symbol=app.config.live_symbol,
         live_symbol_map=app.config.live_symbol_map,
+        twelvedata_symbols=app.config.twelvedata_symbols,
+        primary_symbol=app.config.primary_symbol,
     )
     monkeypatch.setattr("openclaw_futures.api.routes.post_message", post_message)
     _, payload = call_app(app, "POST", "/plan", {"account_size": 10000, "persist_ideas": True})

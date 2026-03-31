@@ -48,6 +48,8 @@ TRADINGCLAW_TWELVEDATA_API_KEY=
 TRADINGCLAW_TWELVEDATA_BASE_URL=https://api.twelvedata.com
 TRADINGCLAW_LIVE_SYMBOL=M6E
 TRADINGCLAW_TWELVEDATA_M6E_SYMBOL=EUR/USD
+TRADINGCLAW_TWELVEDATA_SYMBOLS=EUR/USD,SPY,BTC/USD,ETH/USD
+TRADINGCLAW_PRIMARY_SYMBOL=EUR/USD
 TRADINGCLAW_BACKFILL_DAYS=10
 TRADINGCLAW_SYNC_START=08:00
 TRADINGCLAW_SYNC_END=13:00
@@ -133,7 +135,7 @@ Show journal stats:
 tradingclaw-futures stats
 ```
 
-Run live EUR/USD cache sync and scan status:
+Run live watchlist sync and scan status:
 
 ```bash
 tradingclaw-futures sync run
@@ -242,15 +244,31 @@ curl -s -X POST http://127.0.0.1:8787/scan/run \
 curl -s http://127.0.0.1:8787/scan/status
 ```
 
-## Live EUR/USD Cache Loop
+## Live Watchlist Cache Loop
 
-TradingClaw now supports a stateful local cache for live EUR/USD testing through Twelve Data. This does not replace the file provider and it does not change the deterministic setup engine.
+TradingClaw now supports a stateful local cache for Twelve Data Basic-plan testing across a small watchlist. This does not replace the file provider and it does not change the deterministic setup engine.
 
 - First live sync performs an initial backfill using `TRADINGCLAW_BACKFILL_DAYS` and stores bars in SQLite.
 - Later syncs append only missing bars from the latest cached timestamp for the active interval.
 - The cache prefers `1min` bars and falls back to `5min` bars if Twelve Data does not return usable `1min` data.
-- `scan` uses cached bars as the analysis input and builds the same deterministic `M6E` snapshot path used by the existing engine.
-- Current live testing is `EUR/USD` only, mapped to `M6E`.
+- `scan` uses cached bars as the analysis input and builds deterministic proxy snapshots for:
+  - `EUR/USD` as the `M6E` proxy
+  - `SPY` as the `MES / ES` proxy
+  - `BTC/USD` as the `MBT` proxy
+  - `ETH/USD` as the `MET` proxy
+- Proxy-symbol account sizing remains informational. The deterministic setup engine is still the source of truth, but this pass does not attempt instrument-specific futures sizing for `SPY`, `BTC/USD`, or `ETH/USD`.
+
+### Why This Watchlist
+
+- `EUR/USD`, `SPY`, `BTC/USD`, and `ETH/USD` fit Twelve Data Basic-plan categories without adding commodities or futures in this pass.
+- They cover forex, US ETF/equity, and crypto, which is enough to exercise the cached multi-symbol sync loop without blowing up credit usage.
+- A single 4-symbol batch request is materially cheaper and cleaner than separate one-symbol polling loops.
+
+### Expected Credit Usage
+
+- The implementation attempts batch `time_series` requests whenever multiple symbols share the same sync window and `start_date`.
+- On a typical 5-minute cycle with all 4 watchlist symbols aligned, expect one `1min` batch request and only fall back to `5min` for symbols that need it.
+- Incremental sync groups symbols by their latest cached timestamp so it can still batch where practical instead of forcing one request per symbol every cycle.
 
 The live cache tables are:
 
@@ -268,6 +286,7 @@ The live cache tables are:
 - Leave `TRADINGCLAW_ALLOW_OUTSIDE_WINDOW_MANUAL_SCAN=true` to allow manual `scan run` requests outside the alert window.
 - Use `POST /scan/run` with `"allow_outside_window": true` for one-off debugging even if the default config is more restrictive.
 - Sync status continues to show the configured sync window even when a manual sync is run outside that window.
+- `/sync/status` and `/scan/status` now report the configured watchlist plus per-symbol interval and latest cached timestamp.
 
 ## Idea Lifecycle
 
@@ -383,7 +402,7 @@ print(handle_command("tc result 42 win 86"))
 print(handle_command("tc stats"))
 ```
 
-OpenClaw can keep using the original deterministic plan endpoints for fixture-based workflows, or call the new sync/scan endpoints when testing the cached live EUR/USD loop locally.
+OpenClaw can keep using the original deterministic plan endpoints for fixture-based workflows, or call the new sync/scan endpoints when testing the cached live watchlist loop locally.
 
 ## Troubleshooting
 

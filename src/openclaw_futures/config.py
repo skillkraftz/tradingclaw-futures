@@ -19,6 +19,14 @@ class ContractSpec:
     atr_multiplier: float
 
 
+@dataclass(frozen=True, slots=True)
+class LiveSymbolProfile:
+    symbol: str
+    provider_symbol: str
+    category: str
+    notes: tuple[str, ...] = ()
+
+
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = PACKAGE_ROOT / "data" / "fixtures"
 DEFAULT_DB_PATH = PACKAGE_ROOT / "data" / "runtime" / "tradingclaw.sqlite3"
@@ -44,9 +52,76 @@ CONTRACT_SPECS: dict[str, ContractSpec] = {
         atr_threshold_ticks=10,
         atr_multiplier=1.25,
     ),
+    "EUR/USD": ContractSpec(
+        symbol="EUR/USD",
+        tick_size=0.00005,
+        tick_value=0.625,
+        price_decimals=5,
+        entry_buffer_ticks=2,
+        min_stop_ticks=16,
+        atr_threshold_ticks=10,
+        atr_multiplier=1.25,
+    ),
+    "SPY": ContractSpec(
+        symbol="SPY",
+        tick_size=0.01,
+        tick_value=1.00,
+        price_decimals=2,
+        entry_buffer_ticks=3,
+        min_stop_ticks=15,
+        atr_threshold_ticks=10,
+        atr_multiplier=1.25,
+    ),
+    "BTC/USD": ContractSpec(
+        symbol="BTC/USD",
+        tick_size=0.01,
+        tick_value=1.00,
+        price_decimals=2,
+        entry_buffer_ticks=3,
+        min_stop_ticks=15,
+        atr_threshold_ticks=10,
+        atr_multiplier=1.25,
+    ),
+    "ETH/USD": ContractSpec(
+        symbol="ETH/USD",
+        tick_size=0.01,
+        tick_value=1.00,
+        price_decimals=2,
+        entry_buffer_ticks=3,
+        min_stop_ticks=15,
+        atr_threshold_ticks=10,
+        atr_multiplier=1.25,
+    ),
 }
 
 DEFAULT_SYMBOLS = ("MCL", "M6E")
+DEFAULT_TWELVEDATA_SYMBOLS = ("EUR/USD", "SPY", "BTC/USD", "ETH/USD")
+LIVE_SYMBOL_PROFILES: dict[str, LiveSymbolProfile] = {
+    "EUR/USD": LiveSymbolProfile(
+        symbol="EUR/USD",
+        provider_symbol="EUR/USD",
+        category="forex",
+        notes=("Proxy for M6E live testing.",),
+    ),
+    "SPY": LiveSymbolProfile(
+        symbol="SPY",
+        provider_symbol="SPY",
+        category="equity/etf",
+        notes=("Proxy for MES / ES live testing.",),
+    ),
+    "BTC/USD": LiveSymbolProfile(
+        symbol="BTC/USD",
+        provider_symbol="BTC/USD",
+        category="crypto",
+        notes=("Proxy for MBT live testing.",),
+    ),
+    "ETH/USD": LiveSymbolProfile(
+        symbol="ETH/USD",
+        provider_symbol="ETH/USD",
+        category="crypto",
+        notes=("Proxy for MET live testing.",),
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +146,21 @@ class AppConfig:
     allow_outside_window_manual_scan: bool
     live_symbol: str
     live_symbol_map: dict[str, str]
+    twelvedata_symbols: tuple[str, ...]
+    primary_symbol: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
+        live_symbol = os.getenv("TRADINGCLAW_LIVE_SYMBOL", "M6E").upper()
+        live_symbol_map = {
+            "M6E": os.getenv("TRADINGCLAW_TWELVEDATA_M6E_SYMBOL", "EUR/USD"),
+        }
+        watchlist_text = os.getenv("TRADINGCLAW_TWELVEDATA_SYMBOLS", "").strip()
+        watchlist = (
+            tuple(item.strip() for item in watchlist_text.split(",") if item.strip())
+            if watchlist_text
+            else (live_symbol_map.get(live_symbol, live_symbol),)
+        )
         return cls(
             host=os.getenv("TRADINGCLAW_HOST", "127.0.0.1"),
             port=int(os.getenv("TRADINGCLAW_PORT", "8787")),
@@ -95,10 +182,10 @@ class AppConfig:
             allow_outside_window_manual_scan=_env_bool(
                 os.getenv("TRADINGCLAW_ALLOW_OUTSIDE_WINDOW_MANUAL_SCAN", "true")
             ),
-            live_symbol=os.getenv("TRADINGCLAW_LIVE_SYMBOL", "M6E").upper(),
-            live_symbol_map={
-                "M6E": os.getenv("TRADINGCLAW_TWELVEDATA_M6E_SYMBOL", "EUR/USD"),
-            },
+            live_symbol=live_symbol,
+            live_symbol_map=live_symbol_map,
+            twelvedata_symbols=watchlist or DEFAULT_TWELVEDATA_SYMBOLS,
+            primary_symbol=os.getenv("TRADINGCLAW_PRIMARY_SYMBOL", (watchlist or DEFAULT_TWELVEDATA_SYMBOLS)[0]),
         )
 
     def sync_start_time(self) -> time:
@@ -121,3 +208,10 @@ def parse_clock(value: str) -> time:
 
 def _env_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def live_symbol_profile(symbol: str) -> LiveSymbolProfile:
+    try:
+        return LIVE_SYMBOL_PROFILES[symbol]
+    except KeyError as exc:
+        raise ValueError(f"unsupported live watchlist symbol={symbol!r}") from exc

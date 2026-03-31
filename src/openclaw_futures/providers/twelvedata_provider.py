@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from itertools import groupby
 from urllib import error, parse, request
 
-from openclaw_futures.config import AppConfig
+from openclaw_futures.config import AppConfig, live_symbol_profile
 from openclaw_futures.models import Bar
 
 
@@ -48,8 +49,50 @@ class TwelveDataProvider:
         return cls(
             api_key=config.twelvedata_api_key,
             base_url=config.twelvedata_base_url,
-            symbol_map=config.live_symbol_map,
+            symbol_map={symbol: live_symbol_profile(symbol).provider_symbol for symbol in config.twelvedata_symbols},
         )
+
+    def fetch_preferred_bars_many(
+        self,
+        *,
+        symbols: list[str],
+        start_times: dict[str, str | None],
+        end_at: str | None = None,
+        preferred_intervals: tuple[str, ...] | None = None,
+    ) -> dict[str, dict[str, object]]:
+        pending = list(symbols)
+        results: dict[str, dict[str, object]] = {}
+        errors: dict[str, str] = {}
+        for interval in preferred_intervals or ("1min", "5min"):
+            if not pending:
+                break
+            interval_pending: list[str] = []
+            grouped = groupby(
+                sorted(pending, key=lambda item: start_times.get(item) or ""),
+                key=lambda item: start_times.get(item) or "",
+            )
+            for start_at, group in grouped:
+                grouped_symbols = list(group)
+                batch_results, batch_errors = self.fetch_bars_batch(
+                    symbols=grouped_symbols,
+                    interval=interval,
+                    start_at=start_at or None,
+                    end_at=end_at,
+                )
+                for symbol, bars in batch_results.items():
+                    results[symbol] = {
+                        "interval": interval,
+                        "bars": bars,
+                        "provider_symbol": self.resolve_symbol(symbol),
+                    }
+                for symbol, exc in batch_errors.items():
+                    errors[symbol] = str(exc)
+                    interval_pending.append(symbol)
+            pending = interval_pending
+
+        for symbol in pending:
+            results[symbol] = {"error": errors.get(symbol, "no supported Twelve Data interval succeeded")}
+        return results
 
     def fetch_preferred_bars(
         self,
@@ -101,6 +144,37 @@ class TwelveDataProvider:
             },
         )
         return self._parse_bars(payload)
+
+    def fetch_bars_batch(
+        self,
+        *,
+        symbols: list[str],
+        interval: str,
+        start_at: str | None = None,
+        end_at: str | None = None,
+    ) -> tuple[dict[str, list[Bar]], dict[str, Exception]]:
+        if not symbols:
+            return {}, {}
+        if len(symbols) == 1:
+            symbol = symbols[0]
+            try:
+                return {symbol: self.fetch_bars(symbol=symbol, interval=interval, start_at=start_at, end_at=end_at)}, {}
+            except Exception as exc:  # noqa: BLE001
+                return {}, {symbol: exc}
+        payload = self._request_json(
+            "/time_series",
+            {
+                "symbol": ",".join(self.resolve_symbol(symbol) for symbol in symbols),
+                "interval": interval,
+                "apikey": self.api_key,
+                "format": "JSON",
+                "timezone": "America/New_York",
+                "order": "ASC",
+                **({"start_date": start_at} if start_at else {}),
+                **({"end_date": end_at} if end_at else {}),
+            },
+        )
+        return self._parse_batch_payload(symbols, payload)
 
     def resolve_symbol(self, symbol: str) -> str:
         try:
@@ -162,6 +236,37 @@ class TwelveDataProvider:
         if not bars:
             raise TwelveDataEmptyResponseError("Twelve Data returned no bars")
         return bars
+
+    def _parse_batch_payload(
+        self,
+        symbols: list[str],
+        payload: dict[str, object],
+    ) -> tuple[dict[str, list[Bar]], dict[str, Exception]]:
+        results: dict[str, list[Bar]] = {}
+        errors: dict[str, Exception] = {}
+        provider_to_internal = {self.resolve_symbol(symbol): symbol for symbol in symbols}
+
+        if all(provider_symbol in payload for provider_symbol in provider_to_internal):
+            for provider_symbol, symbol in provider_to_internal.items():
+                try:
+                    item = payload[provider_symbol]
+                    if not isinstance(item, dict):
+                        raise TwelveDataMalformedResponseError("batch payload entries must be objects")
+                    results[symbol] = self._parse_bars(item)
+                except Exception as exc:  # noqa: BLE001
+                    errors[symbol] = exc
+            return results, errors
+
+        data_section = payload.get("data")
+        if isinstance(data_section, dict):
+            nested_payload: dict[str, object] = {}
+            for provider_symbol in provider_to_internal:
+                if provider_symbol in data_section:
+                    nested_payload[provider_symbol] = data_section[provider_symbol]
+            if nested_payload:
+                return self._parse_batch_payload(symbols, nested_payload)
+
+        raise TwelveDataMalformedResponseError("Twelve Data batch payload did not include per-symbol data")
 
 
 def _normalize_timestamp(raw: str) -> str:

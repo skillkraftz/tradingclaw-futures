@@ -12,7 +12,7 @@ def render_help() -> str:
             "",
             "TradingClaw is a local futures analysis engine for MCL and M6E.",
             "It does not configure OpenClaw, does not log into Discord, and execution is manual only.",
-            "Live testing currently supports cached EUR/USD bars for M6E scanning only.",
+            "Live testing currently supports a Twelve Data watchlist: EUR/USD, SPY, BTC/USD, ETH/USD.",
             "",
             "HTTP endpoints:",
             "GET /health",
@@ -180,16 +180,19 @@ def render_sync_status(status: dict[str, object]) -> str:
     lines = [
         "TradingClaw Sync Status",
         f"Provider: {status.get('provider', 'twelvedata')}",
-        f"Symbol: {status.get('symbol')}",
-        f"Interval: {status.get('interval') or '?'}",
+        f"Watchlist: {', '.join(status.get('watchlist', []))}",
+        f"Primary symbol: {status.get('primary_symbol')}",
         f"Backfill days: {status.get('backfill_days')}",
-        f"Latest cached timestamp: {status.get('latest_cached_timestamp') or 'none'}",
         f"Sync window: {window['start']}-{window['end']} | active {window['active']}",
         f"Last sync time: {status.get('last_sync_time') or 'never'}",
     ]
     if summary:
+        lines.append(f"Last sync summary: fetched {summary.get('fetched_bars')} | stored changes {summary.get('stored_changes')}")
+    for symbol, details in status.get("symbols", {}).items():
         lines.append(
-            f"Last sync summary: mode {summary.get('sync_mode')} | fetched {summary.get('fetched_bars')} | stored changes {summary.get('stored_changes')}"
+            f"{symbol} [{details.get('category', '?')}] | interval {details.get('interval') or '?'} | latest {details.get('latest_cached_timestamp') or 'none'}"
+            f" | stored {details.get('stored_changes', 0)}"
+            f"{' | error ' + str(details.get('error')) if details.get('error') else ''}"
         )
     return "\n".join(lines)
 
@@ -199,15 +202,20 @@ def render_scan_status(status: dict[str, object]) -> str:
     summary = status.get("last_scan_result_summary") or {}
     lines = [
         "TradingClaw Scan Status",
-        f"Symbol: {status.get('symbol')}",
-        f"Interval: {status.get('interval') or '?'}",
+        f"Watchlist: {', '.join(status.get('watchlist', []))}",
+        f"Primary symbol: {status.get('primary_symbol')}",
         f"Alert window: {window['start']}-{window['end']} | active {status.get('active')}",
         f"Last scan time: {status.get('last_scan_time') or 'never'}",
     ]
-    if summary:
+    for symbol, details in status.get("symbols", {}).items():
+        last_scan = details.get("last_scan_summary") or {}
         lines.append(
-            f"Last scan summary: bars {summary.get('bars_used')} | valid setups {summary.get('valid_setups')} | persisted ideas {len(summary.get('persisted_idea_ids', []))}"
+            f"{symbol} [{details.get('category', '?')}] | interval {details.get('interval') or '?'} | latest {details.get('latest_cached_timestamp') or 'none'} | bars {last_scan.get('bars_used', 0)}"
+            f" | valid setups {last_scan.get('valid_setups', 0)} | new ideas {len(last_scan.get('new_idea_ids', []))}"
+            f"{' | error ' + str(last_scan.get('error')) if last_scan.get('error') else ''}"
         )
+    if summary and summary.get("webhook_sent") is not None:
+        lines.append(f"Webhook sent: {summary.get('webhook_sent')}")
     return "\n".join(lines)
 
 

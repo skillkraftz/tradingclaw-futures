@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import json
 from datetime import datetime
-from io import StringIO
 
 import pytest
 
@@ -13,17 +12,20 @@ from openclaw_futures.config import AppConfig
 from openclaw_futures.models import Bar
 from openclaw_futures.providers.twelvedata_provider import (
     TwelveDataEmptyResponseError,
+    TwelveDataMalformedResponseError,
     TwelveDataProvider,
-    TwelveDataUnsupportedIntervalError,
 )
 from openclaw_futures.services.scanner import ScannerService
-from openclaw_futures.storage.market_bars import fetch_recent_market_bars, get_latest_cached_timestamp
+from openclaw_futures.storage.market_bars import get_latest_cached_timestamp
 
 
-def _load_fixture_bars(fixture_dir, count: int | None = None) -> list[Bar]:
+WATCHLIST = ("EUR/USD", "SPY", "BTC/USD", "ETH/USD")
+
+
+def _load_fixture_bars(fixture_dir) -> list[Bar]:
     with (fixture_dir / "m6e_bars.csv").open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
-        bars = [
+        return [
             Bar(
                 ts=row["ts"],
                 open=float(row["open"]),
@@ -34,73 +36,96 @@ def _load_fixture_bars(fixture_dir, count: int | None = None) -> list[Bar]:
             )
             for row in reader
         ]
-    return bars if count is None else bars[:count]
 
 
-class FakeLiveProvider:
-    def __init__(self, responses: list[tuple[str, list[Bar], str]]) -> None:
+def _scaled_bars(base_bars: list[Bar], *, factor: float, offset: float = 0.0) -> list[Bar]:
+    return [
+        Bar(
+            ts=bar.ts,
+            open=round((bar.open * factor) + offset, 5 if factor < 10 else 2),
+            high=round((bar.high * factor) + offset, 5 if factor < 10 else 2),
+            low=round((bar.low * factor) + offset, 5 if factor < 10 else 2),
+            close=round((bar.close * factor) + offset, 5 if factor < 10 else 2),
+            volume=bar.volume,
+        )
+        for bar in base_bars
+    ]
+
+
+def _watchlist_bars(fixture_dir) -> dict[str, list[Bar]]:
+    base = _load_fixture_bars(fixture_dir)
+    return {
+        "EUR/USD": base,
+        "SPY": _scaled_bars(base, factor=400.0, offset=-350.0),
+        "BTC/USD": _scaled_bars(base, factor=40000.0, offset=-41000.0),
+        "ETH/USD": _scaled_bars(base, factor=2500.0, offset=-2600.0),
+    }
+
+
+class FakeBatchProvider:
+    def __init__(self, responses: list[dict[str, dict[str, object]]]) -> None:
         self.responses = list(responses)
         self.calls: list[dict[str, object]] = []
 
-    def fetch_preferred_bars(
-        self,
-        *,
-        symbol: str,
-        start_at: str | None = None,
-        end_at: str | None = None,
-        interval_override: str | None = None,
-        preferred_intervals: tuple[str, ...] | None = None,
-    ):
+    def fetch_preferred_bars_many(self, *, symbols, start_times, end_at=None, preferred_intervals=None):
         self.calls.append(
             {
-                "symbol": symbol,
-                "start_at": start_at,
+                "symbols": list(symbols),
+                "start_times": dict(start_times),
                 "end_at": end_at,
-                "interval_override": interval_override,
                 "preferred_intervals": preferred_intervals,
             }
         )
         return self.responses.pop(0)
 
 
-def test_first_run_backfill_and_incremental_sync(connection, config, fixture_dir) -> None:
-    initial = _load_fixture_bars(fixture_dir, count=20)
-    incremental = initial[-2:] + [
-        Bar(ts="2026-03-31 12:05:00", open=1.0830, high=1.0834, low=1.0828, close=1.0832, volume=1200),
-        Bar(ts="2026-03-31 12:10:00", open=1.0832, high=1.0835, low=1.0829, close=1.0833, volume=1220),
-    ]
-    fake = FakeLiveProvider([("1min", initial, "EUR/USD"), ("1min", incremental, "EUR/USD")])
-    scanner = ScannerService(config, connection, live_provider=fake)  # type: ignore[arg-type]
+def _provider_payload(interval: str, bars_by_symbol: dict[str, list[Bar]]) -> dict[str, dict[str, object]]:
+    return {
+        symbol: {
+            "interval": interval,
+            "bars": bars,
+            "provider_symbol": symbol,
+        }
+        for symbol, bars in bars_by_symbol.items()
+    }
+
+
+def test_first_run_backfill_and_incremental_sync_multiple_symbols(connection, config, fixture_dir) -> None:
+    first_batch = _watchlist_bars(fixture_dir)
+    second_batch = {
+        symbol: bars[-2:] + [Bar(ts="2026-03-31 12:05:00", open=bars[-1].open, high=bars[-1].high, low=bars[-1].low, close=bars[-1].close, volume=1200)]
+        for symbol, bars in first_batch.items()
+    }
+    provider = FakeBatchProvider([_provider_payload("1min", first_batch), _provider_payload("1min", second_batch)])
+    scanner = ScannerService(config, connection, live_provider=provider)  # type: ignore[arg-type]
 
     first = scanner.run_sync(now=datetime(2026, 3, 31, 8, 45))
     second = scanner.run_sync(now=datetime(2026, 3, 31, 8, 50))
 
-    assert first["last_sync_summary"]["sync_mode"] == "backfill"
-    assert first["last_sync_summary"]["stored_changes"] == len(initial)
-    assert second["last_sync_summary"]["sync_mode"] == "incremental"
-    assert second["last_sync_summary"]["stored_changes"] == 2
-    assert fake.calls[1]["start_at"] == initial[-1].ts
-    assert get_latest_cached_timestamp(connection, symbol="M6E", interval="1min") == "2026-03-31 12:10:00"
+    assert first["watchlist"] == list(WATCHLIST)
+    assert first["symbols"]["EUR/USD"]["stored_changes"] == len(first_batch["EUR/USD"])
+    assert second["symbols"]["SPY"]["stored_changes"] == 1
+    assert provider.calls[1]["start_times"]["BTC/USD"] == first_batch["BTC/USD"][-1].ts
+    assert get_latest_cached_timestamp(connection, symbol="ETH/USD", interval="1min") == "2026-03-31 12:05:00"
 
 
-def test_sync_status_and_scan_uses_cached_bars(connection, config, fixture_dir) -> None:
-    bars = _load_fixture_bars(fixture_dir)
-    fake = FakeLiveProvider([("1min", bars, "EUR/USD")])
-    scanner = ScannerService(config, connection, live_provider=fake)  # type: ignore[arg-type]
+def test_sync_status_and_scan_group_results(connection, config, fixture_dir) -> None:
+    bars = _watchlist_bars(fixture_dir)
+    scanner = ScannerService(config, connection, live_provider=FakeBatchProvider([_provider_payload("1min", bars)]))  # type: ignore[arg-type]
     scanner.run_sync(now=datetime(2026, 3, 31, 8, 40))
 
     sync_status = scanner.get_sync_status(now=datetime(2026, 3, 31, 8, 41))
     scan = scanner.run_scan(account_size=10_000, now=datetime(2026, 3, 31, 9, 0))
     scan_status = scanner.get_scan_status(now=datetime(2026, 3, 31, 9, 1))
 
-    assert sync_status["interval"] == "1min"
-    assert sync_status["latest_cached_timestamp"] == bars[-1].ts
-    assert scan["plan"]["levels"]["M6E"]["last_price"] == bars[-1].close
-    assert scan["last_scan_result_summary"]["bars_used"] == len(fetch_recent_market_bars(connection, symbol="M6E", interval="1min"))
-    assert scan_status["last_scan_result_summary"]["bars_used"] == scan["last_scan_result_summary"]["bars_used"]
+    assert sync_status["watchlist"] == list(WATCHLIST)
+    assert sync_status["symbols"]["BTC/USD"]["interval"] == "1min"
+    assert scan["symbols"]["SPY"]["category"] == "equity/etf"
+    assert scan["symbols"]["ETH/USD"]["plan"]["levels"]["ETH/USD"]["last_price"] == bars["ETH/USD"][-1].close
+    assert scan_status["symbols"]["EUR/USD"]["last_scan_summary"]["bars_used"] > 0
 
 
-def test_alert_window_blocks_persist_without_override(connection, fixture_dir, db_path) -> None:
+def test_per_symbol_dedupe_and_manual_override(connection, fixture_dir, db_path) -> None:
     config = AppConfig(
         host="127.0.0.1",
         port=8787,
@@ -122,29 +147,34 @@ def test_alert_window_blocks_persist_without_override(connection, fixture_dir, d
         allow_outside_window_manual_scan=False,
         live_symbol="M6E",
         live_symbol_map={"M6E": "EUR/USD"},
+        twelvedata_symbols=WATCHLIST,
+        primary_symbol="EUR/USD",
     )
-    bars = _load_fixture_bars(fixture_dir)
-    scanner = ScannerService(config, connection, live_provider=FakeLiveProvider([("1min", bars, "EUR/USD")]))  # type: ignore[arg-type]
+    bars = _watchlist_bars(fixture_dir)
+    scanner = ScannerService(config, connection, live_provider=FakeBatchProvider([_provider_payload("1min", bars)]))  # type: ignore[arg-type]
     scanner.run_sync(now=datetime(2026, 3, 31, 8, 40))
 
     blocked = scanner.run_scan(persist_ideas=True, post_webhook_flag=True, now=datetime(2026, 3, 31, 12, 15))
     allowed = scanner.run_scan(
         persist_ideas=True,
-        post_webhook_flag=False,
         allow_outside_window=True,
         now=datetime(2026, 3, 31, 12, 20),
     )
+    deduped = scanner.run_scan(
+        persist_ideas=True,
+        allow_outside_window=True,
+        now=datetime(2026, 3, 31, 12, 25),
+    )
 
-    assert blocked["alert_window_active"] is False
     assert blocked["persisted"] is False
     assert blocked["webhook"]["sent"] is False
-    assert allowed["persisted"] is True
     assert allowed["manual_override_used"] is True
+    assert deduped["idea_ids"] == []
 
 
-def test_api_sync_and_scan_endpoints(app, fixture_dir, monkeypatch) -> None:
-    bars = _load_fixture_bars(fixture_dir)
-    app.scanner.live_provider = FakeLiveProvider([("1min", bars, "EUR/USD")])  # type: ignore[assignment]
+def test_api_sync_and_scan_status_for_watchlist(app, fixture_dir, monkeypatch) -> None:
+    bars = _watchlist_bars(fixture_dir)
+    app.scanner.live_provider = FakeBatchProvider([_provider_payload("1min", bars)])  # type: ignore[assignment]
     monkeypatch.setattr(app.scanner, "_now", lambda _value=None: datetime(2026, 3, 31, 9, 0))
 
     sync_status, sync_payload = call_app(app, "POST", "/sync/run", {"days": 5})
@@ -153,65 +183,73 @@ def test_api_sync_and_scan_endpoints(app, fixture_dir, monkeypatch) -> None:
     scan_info_status, scan_info_payload = call_app(app, "GET", "/scan/status")
 
     assert sync_status == 200
-    assert sync_payload["backfill_days"] == 5
+    assert sync_payload["watchlist"] == list(WATCHLIST)
     assert status_status == 200
-    assert status_payload["interval"] == "1min"
+    assert "SPY" in status_payload["symbols"]
     assert scan_status == 200
-    assert scan_payload["persisted"] is True
+    assert "BTC/USD" in scan_payload["symbols"]
     assert scan_info_status == 200
-    assert scan_info_payload["last_scan_result_summary"]["bars_used"] > 0
+    assert scan_info_payload["symbols"]["ETH/USD"]["last_scan_summary"]["bars_used"] > 0
 
 
-def test_twelvedata_provider_success_and_fallback(monkeypatch) -> None:
+def test_twelvedata_provider_batch_request_and_mixed_results(monkeypatch) -> None:
+    provider = TwelveDataProvider(
+        api_key="test-key",
+        symbol_map={symbol: symbol for symbol in WATCHLIST},
+    )
+
     def fake_request_json(self, _path, params):
-        if params["interval"] == "1min":
-            return {
-                "values": [
-                    {"datetime": "2026-03-31 08:00:00", "open": "1.08", "high": "1.09", "low": "1.07", "close": "1.085", "volume": "100"},
-                    {"datetime": "2026-03-31 08:01:00", "open": "1.085", "high": "1.091", "low": "1.08", "close": "1.086", "volume": "110"},
-                ]
-            }
-        raise TwelveDataUnsupportedIntervalError("1min unavailable")
+        assert params["symbol"] == ",".join(WATCHLIST)
+        return {
+            "EUR/USD": {
+                "values": [{"datetime": "2026-03-31 08:00:00", "open": "1.08", "high": "1.09", "low": "1.07", "close": "1.085", "volume": "100"}]
+            },
+            "SPY": {
+                "values": [{"datetime": "2026-03-31 08:00:00", "open": "520", "high": "521", "low": "519", "close": "520.5", "volume": "100"}]
+            },
+            "BTC/USD": {
+                "values": [{"datetime": "2026-03-31 08:00:00", "open": "70000", "high": "70100", "low": "69900", "close": "70050", "volume": "100"}]
+            },
+            "ETH/USD": {"meta": {"symbol": "ETH/USD"}},
+        }
 
-    provider = TwelveDataProvider(api_key="test-key")
     monkeypatch.setattr(TwelveDataProvider, "_request_json", fake_request_json)
-    bars = provider.fetch_bars(symbol="M6E", interval="1min")
-    assert len(bars) == 2
-    assert bars[0].ts == "2026-03-31 08:00:00"
+    results, errors = provider.fetch_bars_batch(symbols=list(WATCHLIST), interval="1min", start_at="2026-03-31 08:00:00")
+    assert set(results) == {"EUR/USD", "SPY", "BTC/USD"}
+    assert "ETH/USD" in errors
 
-    def fake_fetch_bars(self, *, symbol, interval, start_at=None, end_at=None):
+
+def test_twelvedata_provider_multi_symbol_fallback(monkeypatch) -> None:
+    provider = TwelveDataProvider(
+        api_key="test-key",
+        symbol_map={symbol: symbol for symbol in WATCHLIST},
+    )
+
+    def fake_fetch_bars_batch(self, *, symbols, interval, start_at=None, end_at=None):
         if interval == "1min":
-            raise TwelveDataEmptyResponseError("empty")
-        return [Bar(ts="2026-03-31 08:00:00", open=1.08, high=1.09, low=1.07, close=1.085, volume=0)]
+            return {}, {symbol: TwelveDataEmptyResponseError("empty") for symbol in symbols}
+        return (
+            {
+                symbol: [Bar(ts="2026-03-31 08:00:00", open=1.0, high=1.1, low=0.9, close=1.05, volume=0)]
+                for symbol in symbols
+            },
+            {},
+        )
 
-    monkeypatch.setattr(TwelveDataProvider, "fetch_bars", fake_fetch_bars)
-    interval, fallback_bars, provider_symbol = provider.fetch_preferred_bars(symbol="M6E")
-    assert interval == "5min"
-    assert len(fallback_bars) == 1
-    assert provider_symbol == "EUR/USD"
+    monkeypatch.setattr(TwelveDataProvider, "fetch_bars_batch", fake_fetch_bars_batch)
+    results = provider.fetch_preferred_bars_many(
+        symbols=list(WATCHLIST),
+        start_times={symbol: "2026-03-31 08:00:00" for symbol in WATCHLIST},
+    )
+    assert all(result["interval"] == "5min" for result in results.values())
 
 
-def test_twelvedata_provider_missing_key_and_malformed_response(monkeypatch) -> None:
+def test_twelvedata_provider_missing_key_and_batch_malformed(monkeypatch) -> None:
     provider = TwelveDataProvider(api_key="")
     with pytest.raises(Exception):
-        provider.fetch_bars(symbol="M6E", interval="1min")
+        provider.fetch_bars(symbol="EUR/USD", interval="1min")
 
-    payload = StringIO(json.dumps({"meta": {"symbol": "EUR/USD"}})).getvalue()
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return payload.encode("utf-8")
-
-    def fake_urlopen(_request, timeout=15):
-        return FakeResponse()
-
-    monkeypatch.setattr("openclaw_futures.providers.twelvedata_provider.request.urlopen", fake_urlopen)
-    provider = TwelveDataProvider(api_key="test-key")
-    with pytest.raises(Exception):
-        provider.fetch_bars(symbol="M6E", interval="1min")
+    provider = TwelveDataProvider(api_key="test-key", symbol_map={symbol: symbol for symbol in WATCHLIST})
+    monkeypatch.setattr(TwelveDataProvider, "_request_json", lambda self, _path, params: {"meta": {"symbol": "EUR/USD"}})
+    with pytest.raises(TwelveDataMalformedResponseError):
+        provider.fetch_bars_batch(symbols=list(WATCHLIST), interval="1min")

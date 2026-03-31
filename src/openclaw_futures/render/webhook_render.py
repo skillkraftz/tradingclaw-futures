@@ -39,3 +39,12 @@ def render_webhook_transition(idea: TradeIdea, action: TradeAction) -> str:
     if action.pnl_dollars is not None:
         parts.append(f"pnl ${action.pnl_dollars:.2f}")
     return " | ".join(parts)
+
+
+def render_webhook_scan(ideas: list[TradeIdea]) -> str:
+    lines = ["TradingClaw scan alerts"]
+    for idea in ideas:
+        lines.append(
+            f"{idea.symbol} | idea {idea.idea_id} | {idea.bias} | entry {idea.entry_min}-{idea.entry_max} | stop {idea.stop} | target {idea.target} | RR {idea.rr:.2f}"
+        )
+    return "\n".join(lines)

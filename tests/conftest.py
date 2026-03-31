@@ -45,6 +45,8 @@ def config(fixture_dir: Path, db_path: Path) -> AppConfig:
         allow_outside_window_manual_scan=True,
         live_symbol="M6E",
         live_symbol_map={"M6E": "EUR/USD"},
+        twelvedata_symbols=("EUR/USD", "SPY", "BTC/USD", "ETH/USD"),
+        primary_symbol="EUR/USD",
     )
 
 

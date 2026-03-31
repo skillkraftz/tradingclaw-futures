@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from openclaw_futures.analysis.m6e_levels import build_m6e_snapshot
-from openclaw_futures.config import AppConfig
+from openclaw_futures.analysis.live_levels import build_live_snapshot
+from openclaw_futures.config import AppConfig, live_symbol_profile
 from openclaw_futures.integrations.openclaw_contracts import build_trade_plan, idea_contract, plan_contract
 from openclaw_futures.integrations.webhook import post_message
 from openclaw_futures.models import MarketBar, MarketSnapshot
@@ -18,8 +17,8 @@ from openclaw_futures.render.text_render import (
     render_sync_status,
     render_window_state,
 )
-from openclaw_futures.render.webhook_render import render_webhook_plan
-from openclaw_futures.storage.ideas import create_trade_idea
+from openclaw_futures.render.webhook_render import render_webhook_scan
+from openclaw_futures.storage.ideas import create_trade_idea, list_trade_ideas
 from openclaw_futures.storage.market_bars import (
     fetch_recent_market_bars,
     get_latest_cached_timestamp,
@@ -53,82 +52,109 @@ class ScannerService:
         symbol_override: str | None = None,
         now: datetime | None = None,
     ) -> dict[str, object]:
-        live_symbol = (symbol_override or self.config.live_symbol).upper()
+        watchlist = [symbol_override] if symbol_override else list(self.config.twelvedata_symbols)
         current_time = self._now(now)
         backfill_days = days or self.config.backfill_days
-        prior_status = self.get_sync_status(symbol=live_symbol, now=current_time)
-        active_interval = interval_override or prior_status.get("interval") or self._preferred_cached_interval(live_symbol)
-        if force_full_backfill or active_interval is None or needs_initial_backfill(self.connection, symbol=live_symbol, interval=active_interval):
-            start_at = (current_time - timedelta(days=backfill_days)).strftime("%Y-%m-%d %H:%M:%S")
-            interval, bars, provider_symbol = self.live_provider.fetch_preferred_bars(
-                symbol=live_symbol,
-                start_at=start_at,
-                interval_override=interval_override,
-            )
-            sync_mode = "backfill"
-        else:
-            latest = get_latest_cached_timestamp(self.connection, symbol=live_symbol, interval=active_interval)
-            interval, bars, provider_symbol = self.live_provider.fetch_preferred_bars(
-                symbol=live_symbol,
-                start_at=latest,
-                interval_override=interval_override,
-                preferred_intervals=_preferred_intervals(active_interval),
-            )
-            sync_mode = "incremental"
+        start_times: dict[str, str | None] = {}
+        sync_modes: dict[str, str] = {}
+        for symbol in watchlist:
+            active_interval = interval_override or self._preferred_cached_interval(symbol)
+            if force_full_backfill or active_interval is None or needs_initial_backfill(self.connection, symbol=symbol, interval=active_interval):
+                start_times[symbol] = (current_time - timedelta(days=backfill_days)).strftime("%Y-%m-%d %H:%M:%S")
+                sync_modes[symbol] = "backfill"
+            else:
+                start_times[symbol] = get_latest_cached_timestamp(self.connection, symbol=symbol, interval=active_interval)
+                sync_modes[symbol] = "incremental"
 
-        inserted = insert_market_bars(
-            self.connection,
-            [
-                MarketBar(
-                    symbol=live_symbol,
-                    interval=interval,
-                    ts=bar.ts,
-                    open=bar.open,
-                    high=bar.high,
-                    low=bar.low,
-                    close=bar.close,
-                    volume=bar.volume,
-                    source="twelvedata",
-                )
-                for bar in bars
-            ],
+        provider_results = self.live_provider.fetch_preferred_bars_many(
+            symbols=watchlist,
+            start_times=start_times,
+            preferred_intervals=(interval_override,) if interval_override else ("1min", "5min"),
         )
-        latest_cached_timestamp = get_latest_cached_timestamp(self.connection, symbol=live_symbol, interval=interval)
-        summary = {
-            "provider": "twelvedata",
-            "provider_symbol": provider_symbol,
-            "symbol": live_symbol,
-            "interval": interval,
-            "backfill_days": backfill_days,
-            "sync_mode": sync_mode,
-            "fetched_bars": len(bars),
-            "stored_changes": inserted,
-            "latest_cached_timestamp": latest_cached_timestamp,
-            "window_active": self._is_sync_window_active(current_time),
-        }
+        per_symbol: dict[str, dict[str, object]] = {}
+        total_fetched = 0
+        total_stored = 0
+        for symbol in watchlist:
+            result = provider_results[symbol]
+            if "error" in result:
+                active_interval = interval_override or self._preferred_cached_interval(symbol)
+                per_symbol[symbol] = {
+                    "category": live_symbol_profile(symbol).category,
+                    "provider_symbol": self.live_provider.resolve_symbol(symbol),
+                    "interval": active_interval,
+                    "sync_mode": sync_modes[symbol],
+                    "fetched_bars": 0,
+                    "stored_changes": 0,
+                    "latest_cached_timestamp": self._latest_cached_timestamp(symbol, active_interval),
+                    "error": result["error"],
+                }
+                continue
+
+            interval = str(result["interval"])
+            bars = result["bars"]
+            provider_symbol = str(result["provider_symbol"])
+            inserted = insert_market_bars(
+                self.connection,
+                [
+                    MarketBar(
+                        symbol=symbol,
+                        interval=interval,
+                        ts=bar.ts,
+                        open=bar.open,
+                        high=bar.high,
+                        low=bar.low,
+                        close=bar.close,
+                        volume=bar.volume,
+                        source="twelvedata",
+                    )
+                    for bar in bars
+                ],
+            )
+            latest_cached_timestamp = get_latest_cached_timestamp(self.connection, symbol=symbol, interval=interval)
+            total_fetched += len(bars)
+            total_stored += inserted
+            per_symbol[symbol] = {
+                "category": live_symbol_profile(symbol).category,
+                "provider_symbol": provider_symbol,
+                "interval": interval,
+                "sync_mode": sync_modes[symbol],
+                "fetched_bars": len(bars),
+                "stored_changes": inserted,
+                "latest_cached_timestamp": latest_cached_timestamp,
+            }
+
         payload = {
             "provider": "twelvedata",
-            "symbol": live_symbol,
-            "interval": interval,
+            "watchlist": watchlist,
+            "primary_symbol": self.config.primary_symbol,
             "backfill_days": backfill_days,
-            "latest_cached_timestamp": latest_cached_timestamp,
             "sync_window": self._window_payload(self.config.sync_start, self.config.sync_end, current_time),
             "last_sync_time": current_time.isoformat(),
-            "last_sync_summary": summary,
-            "text": render_sync_status(
+            "last_sync_summary": {
+                "watchlist_size": len(watchlist),
+                "fetched_bars": total_fetched,
+                "stored_changes": total_stored,
+                "window_active": self._is_sync_window_active(current_time),
+            },
+            "symbols": per_symbol,
+        }
+        payload["text"] = render_sync_status(payload)
+        set_state(self.connection, _sync_key(None), payload)
+        for symbol, details in per_symbol.items():
+            set_state(
+                self.connection,
+                _sync_key(symbol),
                 {
                     "provider": "twelvedata",
-                    "symbol": live_symbol,
-                    "interval": interval,
+                    "watchlist": [symbol],
+                    "primary_symbol": symbol,
                     "backfill_days": backfill_days,
-                    "latest_cached_timestamp": latest_cached_timestamp,
-                    "sync_window": self._window_payload(self.config.sync_start, self.config.sync_end, current_time),
+                    "sync_window": payload["sync_window"],
                     "last_sync_time": current_time.isoformat(),
-                    "last_sync_summary": summary,
-                }
-            ),
-        }
-        set_state(self.connection, _sync_key(live_symbol), payload)
+                    "last_sync_summary": details,
+                    "symbols": {symbol: details},
+                },
+            )
         return payload
 
     def run_scheduled_cycle(
@@ -164,19 +190,31 @@ class ScannerService:
         return payload
 
     def get_sync_status(self, *, symbol: str | None = None, now: datetime | None = None) -> dict[str, object]:
-        live_symbol = (symbol or self.config.live_symbol).upper()
+        watchlist = [symbol] if symbol else list(self.config.twelvedata_symbols)
         current_time = self._now(now)
-        state = get_state(self.connection, _sync_key(live_symbol)) or {}
+        state = get_state(self.connection, _sync_key(symbol))
+        if state is None:
+            symbols = {
+                item: {
+                    "category": live_symbol_profile(item).category,
+                    "interval": self._preferred_cached_interval(item),
+                    "latest_cached_timestamp": self._latest_cached_timestamp(item, self._preferred_cached_interval(item)),
+                }
+                for item in watchlist
+            }
+            state = {
+                "provider": "twelvedata",
+                "watchlist": watchlist,
+                "primary_symbol": symbol or self.config.primary_symbol,
+                "backfill_days": self.config.backfill_days,
+                "sync_window": self._window_payload(self.config.sync_start, self.config.sync_end, current_time),
+                "last_sync_time": None,
+                "last_sync_summary": None,
+                "symbols": symbols,
+            }
         status = {
-            "provider": "twelvedata",
-            "symbol": live_symbol,
-            "interval": state.get("interval") or self._preferred_cached_interval(live_symbol),
-            "backfill_days": state.get("backfill_days", self.config.backfill_days),
-            "latest_cached_timestamp": state.get("latest_cached_timestamp")
-            or self._latest_cached_timestamp(live_symbol, state.get("interval")),
+            **state,
             "sync_window": self._window_payload(self.config.sync_start, self.config.sync_end, current_time),
-            "last_sync_time": state.get("last_sync_time"),
-            "last_sync_summary": state.get("last_sync_summary"),
         }
         status["text"] = render_sync_status(status)
         return status
@@ -192,17 +230,6 @@ class ScannerService:
         now: datetime | None = None,
     ) -> dict[str, object]:
         current_time = self._now(now)
-        live_symbol = self.config.live_symbol
-        interval = self._preferred_cached_interval(live_symbol)
-        if interval is None:
-            raise ValueError("no cached live bars are available yet; run /sync/run first")
-        bars = fetch_recent_market_bars(self.connection, symbol=live_symbol, interval=interval, limit=_scan_limit(interval))
-        if not bars:
-            raise ValueError("no cached live bars are available yet; run /sync/run first")
-
-        provider = _SingleSnapshotProvider(_snapshot_from_bars(live_symbol, bars))
-        plan = build_trade_plan(provider, account_size, symbols=[live_symbol], source_room=source_room or self.config.room_label)
-
         alert_window_active = self._is_alert_window_active(current_time)
         manual_override = (
             allow_outside_window
@@ -210,11 +237,68 @@ class ScannerService:
             else self.config.allow_outside_window_manual_scan
         )
         may_alert = alert_window_active or manual_override
-        persisted_ideas = [create_trade_idea(self.connection, source_room=plan.source_room, setup=setup) for setup in plan.setups] if persist_ideas and may_alert else []
+        existing_ids = {idea.idea_id for idea in list_trade_ideas(self.connection, limit=1000)}
+        symbol_payloads: dict[str, dict[str, object]] = {}
+        all_new_ideas = []
+        any_cached = False
+        for symbol in self.config.twelvedata_symbols:
+            interval = self._preferred_cached_interval(symbol)
+            if interval is None:
+                symbol_payloads[symbol] = {
+                    "category": live_symbol_profile(symbol).category,
+                    "interval": None,
+                    "latest_cached_timestamp": None,
+                    "bars_used": 0,
+                    "valid_setups": 0,
+                    "rejected_setups": 0,
+                    "new_idea_ids": [],
+                    "error": "no cached live bars are available yet; run /sync/run first",
+                }
+                continue
+            bars = fetch_recent_market_bars(self.connection, symbol=symbol, interval=interval, limit=_scan_limit(interval))
+            if not bars:
+                symbol_payloads[symbol] = {
+                    "category": live_symbol_profile(symbol).category,
+                    "interval": interval,
+                    "latest_cached_timestamp": self._latest_cached_timestamp(symbol, interval),
+                    "bars_used": 0,
+                    "valid_setups": 0,
+                    "rejected_setups": 0,
+                    "new_idea_ids": [],
+                    "error": "no cached live bars are available yet; run /sync/run first",
+                }
+                continue
+            any_cached = True
+            provider = _SingleSnapshotProvider(_snapshot_from_bars(symbol, bars))
+            plan = build_trade_plan(provider, account_size, symbols=[symbol], source_room=source_room or self.config.room_label)
+            persisted_ideas = (
+                [create_trade_idea(self.connection, source_room=plan.source_room, setup=setup) for setup in plan.setups]
+                if persist_ideas and may_alert
+                else []
+            )
+            new_ideas = [idea for idea in persisted_ideas if idea.idea_id not in existing_ids]
+            existing_ids.update(idea.idea_id for idea in new_ideas)
+            all_new_ideas.extend(new_ideas)
+            symbol_payloads[symbol] = {
+                "category": live_symbol_profile(symbol).category,
+                "interval": interval,
+                "latest_cached_timestamp": self._latest_cached_timestamp(symbol, interval),
+                "bars_used": len(bars),
+                "valid_setups": len(plan.setups),
+                "rejected_setups": len(plan.rejected_setups),
+                "new_idea_ids": [idea.idea_id for idea in new_ideas],
+                "plan": plan_contract(plan),
+            }
+
+        if not any_cached:
+            raise ValueError("no cached live bars are available yet; run /sync/run first")
+
         webhook_payload = None
         if post_webhook_flag:
-            if may_alert:
-                webhook_payload = post_message(self.config, render_webhook_plan(plan))
+            if may_alert and all_new_ideas:
+                webhook_payload = post_message(self.config, render_webhook_scan(all_new_ideas))
+            elif may_alert:
+                webhook_payload = {"enabled": bool(self.config.webhook_url), "sent": False, "reason": "no new alerts"}
             else:
                 webhook_payload = {
                     "enabled": bool(self.config.webhook_url),
@@ -223,21 +307,27 @@ class ScannerService:
                 }
 
         summary = {
-            "symbol": live_symbol,
-            "interval": interval,
-            "bars_used": len(bars),
-            "valid_setups": len(plan.setups),
-            "rejected_setups": len(plan.rejected_setups),
+            "watchlist": list(self.config.twelvedata_symbols),
             "alert_window_active": alert_window_active,
             "manual_override_used": bool(not alert_window_active and manual_override),
-            "persisted_idea_ids": [idea.idea_id for idea in persisted_ideas],
+            "symbols": {
+                symbol: {
+                    "bars_used": details["bars_used"],
+                    "valid_setups": details["valid_setups"],
+                    "new_idea_ids": details["new_idea_ids"],
+                    **({"error": details["error"]} if "error" in details else {}),
+                }
+                for symbol, details in symbol_payloads.items()
+            },
             "webhook_sent": bool(webhook_payload and webhook_payload.get("sent")),
         }
         payload = {
-            "plan": plan_contract(plan),
-            "persisted": bool(persist_ideas and may_alert),
-            "idea_ids": [idea.idea_id for idea in persisted_ideas],
-            "ideas": [idea_contract(idea) for idea in persisted_ideas],
+            "watchlist": list(self.config.twelvedata_symbols),
+            "primary_symbol": self.config.primary_symbol,
+            "symbols": symbol_payloads,
+            "persisted": bool(persist_ideas and may_alert and all_new_ideas),
+            "idea_ids": [idea.idea_id for idea in all_new_ideas],
+            "ideas": [idea_contract(idea) for idea in all_new_ideas],
             "alert_window": self._window_payload(self.config.alert_start, self.config.alert_end, current_time),
             "alert_window_active": alert_window_active,
             "manual_override_used": bool(not alert_window_active and manual_override),
@@ -254,28 +344,56 @@ class ScannerService:
             payload["webhook"] = webhook_payload
         set_state(
             self.connection,
-            _scan_key(live_symbol),
+            _scan_key(None),
             {
-                "symbol": live_symbol,
-                "interval": interval,
+                "watchlist": list(self.config.twelvedata_symbols),
+                "primary_symbol": self.config.primary_symbol,
                 "last_scan_time": current_time.isoformat(),
                 "last_scan_result_summary": summary,
+                "symbols": {
+                    symbol: {
+                        "category": details["category"],
+                        "interval": details["interval"],
+                        "latest_cached_timestamp": details.get("latest_cached_timestamp"),
+                        "last_scan_summary": {
+                            "bars_used": details["bars_used"],
+                            "valid_setups": details["valid_setups"],
+                            "rejected_setups": details["rejected_setups"],
+                            "new_idea_ids": details["new_idea_ids"],
+                            **({"error": details["error"]} if "error" in details else {}),
+                        },
+                    }
+                    for symbol, details in symbol_payloads.items()
+                },
             },
         )
-        payload["text"] = "\n\n".join([payload["text"], render_scan_status(self.get_scan_status(symbol=live_symbol, now=current_time))])
+        payload["text"] = "\n\n".join([payload["text"], render_scan_status(self.get_scan_status(now=current_time))])
         return payload
 
     def get_scan_status(self, *, symbol: str | None = None, now: datetime | None = None) -> dict[str, object]:
-        live_symbol = (symbol or self.config.live_symbol).upper()
+        watchlist = [symbol] if symbol else list(self.config.twelvedata_symbols)
         current_time = self._now(now)
-        state = get_state(self.connection, _scan_key(live_symbol)) or {}
+        state = get_state(self.connection, _scan_key(symbol))
+        if state is None:
+            state = {
+                "watchlist": watchlist,
+                "primary_symbol": symbol or self.config.primary_symbol,
+                "last_scan_time": None,
+                "last_scan_result_summary": None,
+                "symbols": {
+                    item: {
+                        "category": live_symbol_profile(item).category,
+                        "interval": self._preferred_cached_interval(item),
+                        "latest_cached_timestamp": self._latest_cached_timestamp(item, self._preferred_cached_interval(item)),
+                        "last_scan_summary": None,
+                    }
+                    for item in watchlist
+                },
+            }
         status = {
-            "symbol": live_symbol,
-            "interval": state.get("interval") or self._preferred_cached_interval(live_symbol),
+            **state,
             "alert_window": self._window_payload(self.config.alert_start, self.config.alert_end, current_time),
             "active": self._is_alert_window_active(current_time),
-            "last_scan_time": state.get("last_scan_time"),
-            "last_scan_result_summary": state.get("last_scan_result_summary"),
         }
         status["text"] = render_scan_status(status)
         return status
@@ -326,9 +444,7 @@ class _SingleSnapshotProvider(MarketDataProvider):
 
 
 def _snapshot_from_bars(symbol: str, bars: list) -> MarketSnapshot:
-    if symbol != "M6E":
-        raise ValueError("live cached-bar scanning is currently supported for M6E only")
-    return build_m6e_snapshot(bars)
+    return build_live_snapshot(symbol, bars)
 
 
 def _time_in_window(now: datetime, start: str, end: str) -> bool:
@@ -346,9 +462,9 @@ def _preferred_intervals(active_interval: str) -> tuple[str, ...]:
     return ("1min", "5min")
 
 
-def _sync_key(symbol: str) -> str:
-    return f"sync_status:{symbol}"
+def _sync_key(symbol: str | None) -> str:
+    return f"sync_status:{symbol}" if symbol else "sync_status:watchlist"
 
 
-def _scan_key(symbol: str) -> str:
-    return f"scan_status:{symbol}"
+def _scan_key(symbol: str | None) -> str:
+    return f"scan_status:{symbol}" if symbol else "scan_status:watchlist"
