@@ -8,8 +8,12 @@ def suggest_contract_allocations(account_size: float, setups: list[SetupCandidat
     if account_size <= 0:
         raise ValueError("account_size must be positive")
 
-    mcl_risk = _risk_for_symbol(setups, "MCL")
-    m6e_risk = _risk_for_symbol(setups, "M6E")
+    valid_setups = [setup for setup in setups if setup.valid]
+    if not valid_setups:
+        return []
+
+    mcl_risk = _risk_for_symbol(valid_setups, "MCL")
+    m6e_risk = _risk_for_symbol(valid_setups, "M6E")
     baseline_risk = min(mcl_risk, m6e_risk)
 
     profiles = (

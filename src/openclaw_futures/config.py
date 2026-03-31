@@ -1,4 +1,4 @@
-"""Static configuration for openclaw-futures."""
+"""Package-local configuration for TradingClaw Futures."""
 from __future__ import annotations
 
 import os
@@ -20,8 +20,7 @@ class ContractSpec:
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = PACKAGE_ROOT / "data" / "fixtures"
-DATA_DIR = Path(os.getenv("OPENCLAW_DATA_DIR", DEFAULT_DATA_DIR))
-DEFAULT_PROVIDER = os.getenv("OPENCLAW_DEFAULT_PROVIDER", "file")
+DEFAULT_DB_PATH = PACKAGE_ROOT / "data" / "runtime" / "tradingclaw.sqlite3"
 
 CONTRACT_SPECS: dict[str, ContractSpec] = {
     "MCL": ContractSpec(
@@ -47,4 +46,30 @@ CONTRACT_SPECS: dict[str, ContractSpec] = {
 }
 
 DEFAULT_SYMBOLS = ("MCL", "M6E")
-MAX_DISCORD_MESSAGE_LEN = 1900
+
+
+@dataclass(frozen=True, slots=True)
+class AppConfig:
+    host: str
+    port: int
+    data_dir: Path
+    default_provider: str
+    db_path: Path
+    webhook_url: str
+    webhook_thread_id: str
+    room_label: str
+    log_level: str
+
+    @classmethod
+    def from_env(cls) -> "AppConfig":
+        return cls(
+            host=os.getenv("TRADINGCLAW_HOST", "127.0.0.1"),
+            port=int(os.getenv("TRADINGCLAW_PORT", "8787")),
+            data_dir=Path(os.getenv("TRADINGCLAW_DATA_DIR", str(DEFAULT_DATA_DIR))),
+            default_provider=os.getenv("TRADINGCLAW_DEFAULT_PROVIDER", "file"),
+            db_path=Path(os.getenv("TRADINGCLAW_DB_PATH", str(DEFAULT_DB_PATH))),
+            webhook_url=os.getenv("TRADINGCLAW_WEBHOOK_URL", ""),
+            webhook_thread_id=os.getenv("TRADINGCLAW_WEBHOOK_THREAD_ID", ""),
+            room_label=os.getenv("TRADINGCLAW_ROOM_LABEL", "trading-room"),
+            log_level=os.getenv("TRADINGCLAW_LOG_LEVEL", "INFO").upper(),
+        )

@@ -3,23 +3,21 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "openclaw-futures"
+name = "tradingclaw-futures"
 version = "0.1.0"
-description = "Discord-first futures setup engine for MCL and M6E."
+description = "Local futures analysis engine for deterministic MCL and M6E trade planning."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [
-  "discord.py>=2.4,<3",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
-  "pytest-asyncio>=0.23",
 ]
 
 [project.scripts]
-openclaw-futures-bot = "openclaw_futures.bot:main"
+tradingclaw-futures = "openclaw_futures.cli:main"
+tradingclaw-futures-api = "openclaw_futures.cli:serve_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_futures"]

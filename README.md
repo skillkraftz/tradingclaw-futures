@@ -1,21 +1,29 @@
-# openclaw-futures
+# tradingclaw-futures
 
-`openclaw-futures` is a Discord-first futures setup engine for manual trade planning in `MCL` and `M6E`. It reads fixture-backed market data through pluggable providers, generates deterministic 1:3 setups, scores them, and renders account-aware trade plans for Discord slash commands.
+`tradingclaw-futures` is a local futures analysis engine for deterministic manual trade planning in `MCL` and `M6E`.
+
+It is not a Discord bot, does not require a Discord token, does not modify `openclaw.json`, and does not manage OpenClaw. OpenClaw can call TradingClaw externally over HTTP and can optionally pass TradingClaw output to Codex for additional reasoning or summarization.
 
 ## Scope
 
 - Futures only: `MCL` and `M6E`
 - Manual execution only
 - Deterministic 1:3 reward-to-risk setup generation
-- Account-aware contract sizing
-- Discord slash commands via `discord.py` 2.x `app_commands`
-- File-based market data provider for v1
+- Stable invalidation and account sizing logic
+- Pluggable market data providers
+- Local HTTP API
+- Optional CLI for debugging and admin actions
+- Persistent SQLite trade journal
+- Optional webhook posting when configured
 
 ## Package Layout
 
 ```text
 src/openclaw_futures/
-  bot.py
+  api/
+    app.py
+    routes.py
+  cli.py
   config.py
   models.py
   providers/
@@ -29,74 +37,136 @@ src/openclaw_futures/
   risk/
     contracts.py
     account_plan.py
+  storage/
+    db.py
+    ideas.py
+    results.py
+    stats.py
+  integrations/
+    webhook.py
+    openclaw_contracts.py
   render/
-    discord_render.py
-  discord/
-    commands/
+    text_render.py
+    webhook_render.py
+    assistant_render.py
 ```
 
 ## Setup
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 cp .env.example .env
 pytest
 ```
 
-## Example Bot Run Command
+## Config
+
+TradingClaw uses package-local environment variables only:
 
 ```bash
-DISCORD_BOT_TOKEN=your-token-here python -m openclaw_futures.bot
+TRADINGCLAW_HOST=127.0.0.1
+TRADINGCLAW_PORT=8787
+TRADINGCLAW_DATA_DIR=./data/fixtures
+TRADINGCLAW_DEFAULT_PROVIDER=file
+TRADINGCLAW_DB_PATH=./data/runtime/tradingclaw.sqlite3
+TRADINGCLAW_WEBHOOK_URL=
+TRADINGCLAW_WEBHOOK_THREAD_ID=
+TRADINGCLAW_ROOM_LABEL=trading-room
+TRADINGCLAW_LOG_LEVEL=INFO
 ```
 
-## Slash Commands
+Webhook settings are optional. If they are absent, TradingClaw still works fully as a local engine.
 
-- `/trades <account_size>`
-- `/setups`
-- `/setups symbol:<MCL|M6E>`
-- `/levels`
-- `/account <account_size>`
-- `/plan <account_size>`
+## Local Usage
 
-## Data Fixtures
+Run the API:
 
-The default provider reads from `data/fixtures` inside the package root. JSON snapshots and CSV bar files are both supported.
+```bash
+tradingclaw-futures serve
+```
 
-Example files:
+Run CLI help:
 
-- `data/fixtures/mcl_snapshot.json`
-- `data/fixtures/m6e_snapshot.json`
-- `data/fixtures/mcl_bars.csv`
-- `data/fixtures/m6e_bars.csv`
+```bash
+tradingclaw-futures help
+```
 
-## Migration Note
+Generate a plan and persist ideas:
 
-### Removed from `morning-report`
+```bash
+tradingclaw-futures plan --account-size 10000 --persist
+```
 
-- All EUR/USD and forex-specific logic
-- All CL proxy wording and generic crude proxy behavior
-- Report/watchlist/news pipelines
-- Webhook posting flow
-- Any assumption that setups are generated for non-futures instruments
+Inspect reasoning context:
 
-### Preserved conceptually
+```bash
+tradingclaw-futures reasoning-context --account-size 10000 --symbols MCL M6E
+```
 
-- Deterministic 1:3 reward-to-risk setup engine
-- Score-and-sort workflow for candidate setups
-- Plain-text command-oriented output style
+## HTTP API
 
-### New in `openclaw-futures`
+- `GET /health`
+- `GET /help`
+- `POST /setups`
+- `POST /levels`
+- `POST /account`
+- `POST /plan`
+- `GET /ideas`
+- `POST /ideas/{idea_id}/take`
+- `POST /ideas/{idea_id}/skip`
+- `POST /ideas/{idea_id}/invalidate`
+- `POST /ideas/{idea_id}/result`
+- `GET /stats`
+- `POST /reasoning-context`
 
-- Discord-first command interface with slash commands
-- Futures-native `MCL` and `M6E` contract modeling
-- Account-aware contract sizing suggestions, including mixed allocations
-- Pluggable market data providers with a file-backed v1 implementation
-- Explicit daily risk caps, invalidation zones, and do-not-trade conditions
+`POST /plan` can persist valid setups as `proposed` ideas and returns stable numeric `idea_id` values from SQLite.
+
+## SQLite Journal
+
+TradingClaw persists:
+
+- `trade_ideas`
+- `trade_actions`
+
+Supported status transitions:
+
+- `proposed -> taken`
+- `proposed -> skipped`
+- `proposed -> invalidated`
+- `taken -> win`
+- `taken -> loss`
+- `taken -> breakeven`
+
+## Reasoning Context
+
+`POST /reasoning-context` returns a compact deterministic object for external AI or orchestration layers such as OpenClaw. It includes:
+
+- account size
+- requested symbols
+- valid setups
+- rejected setups and rejection reasons
+- major levels
+- invalidation zones
+- do-not-trade conditions
+- contract sizing summary
+- journal/status summary
+
+TradingClaw prepares this context but does not make a model call itself.
+
+## Example OpenClaw Workflow
+
+1. OpenClaw receives a Discord request.
+2. OpenClaw calls TradingClaw on `localhost`.
+3. TradingClaw returns deterministic setup, risk, journal, and reasoning-context data.
+4. OpenClaw presents that output directly or forwards the reasoning context to Codex for explanation.
+5. Trade execution remains manual outside both systems.
 
 ## Notes
 
-- This package does not place orders.
-- It does not include broker API integration.
-- Market data is intentionally provider-driven so a live provider can be added later without changing setup or risk logic.
+- TradingClaw does not place orders.
+- It does not include broker APIs.
+- It does not include Tradovate integration.
+- It does not run as a separate Discord bot.
+- OpenClaw integration is external and optional.

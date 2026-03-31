@@ -6,6 +6,9 @@ from openclaw_futures.risk.contracts import suggest_contract_allocations
 
 
 def build_account_plan(account_size: float, setups: list[SetupCandidate]) -> AccountPlan:
+    if account_size <= 0:
+        raise ValueError("account_size must be positive")
+
     if account_size < 500:
         risk_percent = 0.005
     elif account_size < 5_000:
@@ -22,6 +25,8 @@ def build_account_plan(account_size: float, setups: list[SetupCandidate]) -> Acc
         "Daily loss cap is deterministic and should not be exceeded.",
         "Prefer mixed MCL/M6E exposure over concentrating the full budget in one contract.",
     ]
+    if not allocations:
+        notes.append("No allocation is available until at least one valid setup exists.")
     return AccountPlan(
         account_size=round(account_size, 2),
         risk_percent=round(risk_percent * 100, 2),

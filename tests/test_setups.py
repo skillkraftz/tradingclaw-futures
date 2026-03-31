@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from openclaw_futures.analysis.setups import best_setups, generate_setups, setup_reward_ratio
+from openclaw_futures.analysis.setups import best_setups, evaluate_setups, generate_setups, setup_reward_ratio
 
 
 def test_rr_calculation_is_exact_for_bullish() -> None:
@@ -31,3 +31,10 @@ def test_generate_setups_from_snapshot(provider) -> None:
     assert first.symbol == "MCL"
     assert first.risk_per_contract > 0
     assert first.reward_per_contract == pytest.approx(first.risk_per_contract * 3, abs=0.02)
+
+
+def test_evaluate_setups_includes_rejections(provider) -> None:
+    valid, rejected = evaluate_setups(provider.get_snapshot("MCL"))
+    assert valid
+    assert rejected
+    assert rejected[0].rejection_reasons

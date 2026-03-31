@@ -1,5 +1,5 @@
-"""openclaw-futures package."""
+"""TradingClaw Futures local engine."""
 
-from .config import CONTRACT_SPECS
+from .config import AppConfig, CONTRACT_SPECS
 
-__all__ = ["CONTRACT_SPECS"]
+__all__ = ["AppConfig", "CONTRACT_SPECS"]
