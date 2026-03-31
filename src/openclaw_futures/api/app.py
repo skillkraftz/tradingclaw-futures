@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+import errno
+import sys
 from wsgiref.simple_server import make_server
 
 from openclaw_futures.api import routes
@@ -23,6 +25,8 @@ class TradingClawApp:
             path = environ.get("PATH_INFO", "/")
             body = _read_body(environ)
             status_code, payload = self.dispatch(method, path, body)
+        except json.JSONDecodeError as exc:
+            status_code, payload = 400, {"error": f"invalid JSON body: {exc.msg}"}
         except ValueError as exc:
             status_code, payload = 400, {"error": str(exc)}
         except FileNotFoundError as exc:
@@ -79,9 +83,19 @@ def create_app(config: AppConfig | None = None) -> TradingClawApp:
 
 def run_server(config: AppConfig | None = None) -> None:
     app = create_app(config)
-    with make_server(app.config.host, app.config.port, app) as server:
-        print(f"TradingClaw listening on http://{app.config.host}:{app.config.port}")
-        server.serve_forever()
+    try:
+        with make_server(app.config.host, app.config.port, app) as server:
+            print(f"TradingClaw listening on http://{app.config.host}:{app.config.port}", flush=True)
+            try:
+                server.serve_forever()
+            except KeyboardInterrupt:
+                print("TradingClaw stopped.", file=sys.stderr)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            raise RuntimeError(
+                f"port {app.config.port} is already in use on host {app.config.host}"
+            ) from exc
+        raise
 
 
 def _read_body(environ) -> dict[str, object]:

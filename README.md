@@ -2,66 +2,33 @@
 
 `tradingclaw-futures` is a local futures analysis engine for deterministic manual trade planning in `MCL` and `M6E`.
 
-It is not a Discord bot, does not require a Discord token, does not modify `openclaw.json`, and does not manage OpenClaw. OpenClaw can call TradingClaw externally over HTTP and can optionally pass TradingClaw output to Codex for additional reasoning or summarization.
+It is not a Discord bot, does not require a Discord token, does not modify `openclaw.json`, and does not manage OpenClaw. OpenClaw can call TradingClaw externally over HTTP and can optionally pass TradingClaw output to Codex for explanation or summarization.
 
-## Scope
+## What Is Implemented
 
 - Futures only: `MCL` and `M6E`
 - Manual execution only
 - Deterministic 1:3 reward-to-risk setup generation
 - Stable invalidation and account sizing logic
-- Pluggable market data providers
-- Local HTTP API
-- Optional CLI for debugging and admin actions
+- File-backed market data provider
+- Local HTTP API using Python stdlib `wsgiref`
+- Optional CLI for local debugging and admin actions
 - Persistent SQLite trade journal
-- Optional webhook posting when configured
+- Optional webhook posting with `thread_id` support
 
-## Package Layout
-
-```text
-src/openclaw_futures/
-  api/
-    app.py
-    routes.py
-  cli.py
-  config.py
-  models.py
-  providers/
-    base.py
-    file_provider.py
-  analysis/
-    mcl_levels.py
-    m6e_levels.py
-    setups.py
-    scoring.py
-  risk/
-    contracts.py
-    account_plan.py
-  storage/
-    db.py
-    ideas.py
-    results.py
-    stats.py
-  integrations/
-    webhook.py
-    openclaw_contracts.py
-  render/
-    text_render.py
-    webhook_render.py
-    assistant_render.py
-```
-
-## Setup
+## Fresh Install
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 cp .env.example .env
-pytest
+pytest -q
 ```
 
-## Config
+Runtime dependencies are currently empty. The package uses only the Python standard library at runtime.
+
+## Configuration
 
 TradingClaw uses package-local environment variables only:
 
@@ -77,35 +44,82 @@ TRADINGCLAW_ROOM_LABEL=trading-room
 TRADINGCLAW_LOG_LEVEL=INFO
 ```
 
-Webhook settings are optional. If they are absent, TradingClaw still works fully as a local engine.
+If `TRADINGCLAW_WEBHOOK_URL` is unset, TradingClaw still works fully in local-only mode.
 
-## Local Usage
-
-Run the API:
+## Start The API
 
 ```bash
+source .venv/bin/activate
 tradingclaw-futures serve
 ```
 
-Run CLI help:
+Alternative entrypoint:
+
+```bash
+source .venv/bin/activate
+tradingclaw-futures-api
+```
+
+The server binds to `http://127.0.0.1:8787` by default.
+
+## CLI Examples
+
+Show built-in help:
 
 ```bash
 tradingclaw-futures help
 ```
 
-Generate a plan and persist ideas:
+Show current levels:
+
+```bash
+tradingclaw-futures levels --symbols MCL M6E
+```
+
+Show setups without persisting:
+
+```bash
+tradingclaw-futures setups --account-size 10000 --symbols MCL M6E
+```
+
+Generate and persist a plan:
 
 ```bash
 tradingclaw-futures plan --account-size 10000 --persist
 ```
 
-Inspect reasoning context:
+Inspect persisted ideas:
+
+```bash
+tradingclaw-futures ideas --json
+```
+
+Take, skip, invalidate, and result actions:
+
+```bash
+tradingclaw-futures take 3 --contracts 1 --entry-fill 72.18
+tradingclaw-futures skip 1 --notes "standing down"
+tradingclaw-futures invalidate 2 --notes "price left zone"
+tradingclaw-futures result 3 --result win --exit-fill 72.86 --pnl-dollars 67.5
+tradingclaw-futures result 4 --result breakeven --exit-fill 1.08220 --pnl-dollars 0
+tradingclaw-futures result 5 --result loss --exit-fill 71.96 --pnl-dollars=-22.5
+```
+
+Get reasoning context for OpenClaw or another orchestrator:
 
 ```bash
 tradingclaw-futures reasoning-context --account-size 10000 --symbols MCL M6E
 ```
 
+Show journal stats:
+
+```bash
+tradingclaw-futures stats
+```
+
 ## HTTP API
+
+Implemented endpoints:
 
 - `GET /health`
 - `GET /help`
@@ -121,16 +135,62 @@ tradingclaw-futures reasoning-context --account-size 10000 --symbols MCL M6E
 - `GET /stats`
 - `POST /reasoning-context`
 
-`POST /plan` can persist valid setups as `proposed` ideas and returns stable numeric `idea_id` values from SQLite.
+Health check:
 
-## SQLite Journal
+```bash
+curl -s http://127.0.0.1:8787/health
+```
 
-TradingClaw persists:
+Help output:
 
-- `trade_ideas`
-- `trade_actions`
+```bash
+curl -s http://127.0.0.1:8787/help
+```
 
-Supported status transitions:
+Plan generation with persistence:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"account_size":10000,"persist_ideas":true}'
+```
+
+Reasoning context:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/reasoning-context \
+  -H 'Content-Type: application/json' \
+  -d '{"account_size":10000,"symbols":["MCL","M6E"]}'
+```
+
+Take an idea:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/ideas/3/take \
+  -H 'Content-Type: application/json' \
+  -d '{"contracts":1,"entry_fill":72.18}'
+```
+
+Record a result:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/ideas/3/result \
+  -H 'Content-Type: application/json' \
+  -d '{"result":"win","exit_fill":72.86,"pnl_dollars":67.5}'
+```
+
+List ideas and stats:
+
+```bash
+curl -s http://127.0.0.1:8787/ideas
+curl -s http://127.0.0.1:8787/stats
+```
+
+## Idea Lifecycle
+
+Persisted ideas use stable numeric `idea_id` values from SQLite.
+
+Supported transitions:
 
 - `proposed -> taken`
 - `proposed -> skipped`
@@ -139,9 +199,16 @@ Supported status transitions:
 - `taken -> loss`
 - `taken -> breakeven`
 
+SQLite tables:
+
+- `trade_ideas`
+- `trade_actions`
+
+The parent directory for `TRADINGCLAW_DB_PATH` is created automatically on first run.
+
 ## Reasoning Context
 
-`POST /reasoning-context` returns a compact deterministic object for external AI or orchestration layers such as OpenClaw. It includes:
+`POST /reasoning-context` returns a compact deterministic payload for OpenClaw or another orchestration layer. It includes:
 
 - account size
 - requested symbols
@@ -151,17 +218,64 @@ Supported status transitions:
 - invalidation zones
 - do-not-trade conditions
 - contract sizing summary
-- journal/status summary
+- journal status summary
 
-TradingClaw prepares this context but does not make a model call itself.
+TradingClaw prepares the context only. It does not make model calls itself.
+
+## Webhook Usage
+
+Webhook posting is optional and only happens when explicitly requested in `POST /plan` with `"post_webhook": true`.
+
+Example local request with webhook enabled by environment:
+
+```bash
+export TRADINGCLAW_WEBHOOK_URL="https://discord.com/api/webhooks/..."
+export TRADINGCLAW_WEBHOOK_THREAD_ID="123456789012345678"
+
+curl -s -X POST http://127.0.0.1:8787/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"account_size":10000,"persist_ideas":true,"post_webhook":true}'
+```
+
+Implemented behavior:
+
+- When no webhook URL is configured, TradingClaw returns a structured `"sent": false` webhook result and still completes the plan request.
+- When `TRADINGCLAW_WEBHOOK_THREAD_ID` is set, TradingClaw appends `thread_id=...` to the webhook URL.
+- The webhook payload contains rendered text only. It does not alter journal state.
 
 ## Example OpenClaw Workflow
 
 1. OpenClaw receives a Discord request.
-2. OpenClaw calls TradingClaw on `localhost`.
-3. TradingClaw returns deterministic setup, risk, journal, and reasoning-context data.
-4. OpenClaw presents that output directly or forwards the reasoning context to Codex for explanation.
+2. OpenClaw calls TradingClaw over `localhost`.
+3. TradingClaw returns deterministic setups, levels, risk, persistence state, or reasoning context.
+4. OpenClaw presents that output directly, or forwards the reasoning-context payload to Codex for explanation.
 5. Trade execution remains manual outside both systems.
+
+## Troubleshooting
+
+Missing runtime directory:
+
+- Set `TRADINGCLAW_DB_PATH` to the intended SQLite file.
+- TradingClaw creates the parent directory automatically when opening the DB.
+
+Bad fixture data:
+
+- The file provider raises `ValueError` for malformed JSON or CSV fixtures.
+- Verify `TRADINGCLAW_DATA_DIR` and the expected `mcl_*` / `m6e_*` files.
+
+Webhook unset:
+
+- Leave `TRADINGCLAW_WEBHOOK_URL=` blank for local-only mode.
+- `POST /plan` still succeeds; the webhook result reports `"sent": false`.
+
+Port already in use:
+
+- Set a different `TRADINGCLAW_PORT`.
+- Restart the server with the new value.
+
+Negative PnL on CLI:
+
+- Pass negative values as `--pnl-dollars=-22.5` to avoid shell ambiguity.
 
 ## Notes
 
