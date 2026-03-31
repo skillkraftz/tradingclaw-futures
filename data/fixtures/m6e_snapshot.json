@@ -1,0 +1,23 @@
+{
+  "symbol": "M6E",
+  "overnight_high": 1.08210,
+  "overnight_low": 1.08040,
+  "prior_day_high": 1.08490,
+  "prior_day_low": 1.07920,
+  "daily_open": 1.08120,
+  "last_price": 1.08175,
+  "atr": 0.0008,
+  "invalidation_high": 1.08250,
+  "invalidation_low": 1.08000,
+  "notes": [
+    "Fixture snapshot for M6E"
+  ],
+  "bars": [
+    {"ts": "2026-03-30 08:00:00", "open": 1.08010, "high": 1.08100, "low": 1.07980, "close": 1.08060, "volume": 2100},
+    {"ts": "2026-03-30 12:00:00", "open": 1.08060, "high": 1.08200, "low": 1.08020, "close": 1.08180, "volume": 2500},
+    {"ts": "2026-03-30 15:55:00", "open": 1.08180, "high": 1.08490, "low": 1.07920, "close": 1.08150, "volume": 2600},
+    {"ts": "2026-03-31 06:00:00", "open": 1.08110, "high": 1.08210, "low": 1.08080, "close": 1.08190, "volume": 1800},
+    {"ts": "2026-03-31 08:25:00", "open": 1.08120, "high": 1.08150, "low": 1.08040, "close": 1.08090, "volume": 1700},
+    {"ts": "2026-03-31 09:35:00", "open": 1.08130, "high": 1.08190, "low": 1.08110, "close": 1.08175, "volume": 2000}
+  ]
+}

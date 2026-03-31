@@ -1,0 +1,23 @@
+{
+  "symbol": "MCL",
+  "overnight_high": 72.15,
+  "overnight_low": 71.78,
+  "prior_day_high": 72.88,
+  "prior_day_low": 71.35,
+  "daily_open": 71.92,
+  "last_price": 72.04,
+  "atr": 0.18,
+  "invalidation_high": 72.24,
+  "invalidation_low": 71.69,
+  "notes": [
+    "Fixture snapshot for MCL"
+  ],
+  "bars": [
+    {"ts": "2026-03-30 08:00:00", "open": 71.60, "high": 71.75, "low": 71.52, "close": 71.68, "volume": 1200},
+    {"ts": "2026-03-30 12:00:00", "open": 71.68, "high": 72.10, "low": 71.60, "close": 72.00, "volume": 1500},
+    {"ts": "2026-03-30 15:55:00", "open": 72.00, "high": 72.88, "low": 71.35, "close": 72.18, "volume": 1600},
+    {"ts": "2026-03-31 06:00:00", "open": 71.90, "high": 72.15, "low": 71.82, "close": 72.02, "volume": 1100},
+    {"ts": "2026-03-31 08:25:00", "open": 71.96, "high": 72.05, "low": 71.78, "close": 71.98, "volume": 900},
+    {"ts": "2026-03-31 09:35:00", "open": 72.00, "high": 72.10, "low": 71.95, "close": 72.04, "volume": 1300}
+  ]
+}

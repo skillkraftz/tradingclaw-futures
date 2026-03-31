@@ -1,0 +1,85 @@
+# ---------------------------
+# Python
+# ---------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ---------------------------
+# Build / packaging
+# ---------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---------------------------
+# Testing
+# ---------------------------
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ---------------------------
+# Environment / secrets
+# ---------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------
+# Logs
+# ---------------------------
+*.log
+
+# ---------------------------
+# IDE / Editor
+# ---------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------------------------
+# OS files
+# ---------------------------
+.DS_Store
+Thumbs.db
+
+# ---------------------------
+# Runtime artifacts
+# ---------------------------
+*.sqlite3
+*.db
+
+# ---------------------------
+# Discord / bot temp files
+# ---------------------------
+*.session
+*.cache
+
+# ---------------------------
+# Local data overrides (KEEP fixtures)
+# ---------------------------
+data/local/
+data/runtime/
+
+# ---------------------------
+# Pyright / type checking
+# ---------------------------
+.pyright/
+
+# ---------------------------
+# Misc
+# ---------------------------
+*.bak
+*.tmp

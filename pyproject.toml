@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openclaw-futures"
+version = "0.1.0"
+description = "Discord-first futures setup engine for MCL and M6E."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "discord.py>=2.4,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+openclaw-futures-bot = "openclaw_futures.bot:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openclaw_futures"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
